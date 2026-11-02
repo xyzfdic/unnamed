@@ -194,12 +194,27 @@ export async function sharedAudit() { if (!SHARED) return null; const bal = awai
 /** one launch, start to now, from the vault's own counters (cumulative — not the last 200 activity lines): what went in, what the chest
  *  sold into buys, the fees it got, what it bought back. The app adds what's left at today's price. `fitted`: books were scaled to the
  *  wallet after outside trades, so a result for this chest alone can't be computed (the app shows the wallet total instead). */
+/** the chest's books were changed by something outside its own trades — fitted to the wallet, reconciled by the operator, someone else
+ *  trading from the vault wallet, a chest moved — so "holds now − put in" is not this coin's result */
+/** a shared chest's books must add up: put in − launch buy + sold into buys + fees − buys − creator pay − refunds ≈ what it holds now.
+ *  When they don't (beyond tx fees), SOL moved in or out of the vault wallet outside the chest's own trades. */
+function booksAddUp(v: Vault) {
+  if (!v.shared || v.paper) return true; const sc: any = v.score || {}
+  const refunds = v.activity.filter((a) => a.kind === 'note' && /refunded/.test(a.msg || '')).reduce((x, a) => x + (a.sol || 0), 0)
+  // every way SOL leaves a chest is counted (buys and desk fills — both in `redeployed` —, creator pay, copies' share, cash-outs, refunds); a few ways in are not
+  // (trims, desk ask fills) — so only a chest that holds LESS than its books say is flagged: SOL left the wallet outside its trades
+  const out = (sc.redeployed || 0) + (v.devPaid || 0) + (v.streamed || 0) + (v.redeemed || 0) + refunds
+  const expect = (fundedSol(v) || v.stakeSol || 0) - (v.launchSpend || 0) + (sc.captured || 0) + (v.taxClaimed || 0) - out
+  const flow = (sc.captured || 0) + (v.taxClaimed || 0) + out
+  return v.chest >= expect - (0.05 + flow * 0.03)
+}
+const booksMoved = (v: Vault) => !booksAddUp(v) || !!((v as any).fittedAt || (v as any).reconciledAt || (v as any)._foreignN || v.ledgerDirty || v.activity.some((a) => a.kind === 'note' && /^reconciled to the wallet|^chest moved to|^paused: someone else traded/.test(a.msg || '')) || v.activity.some((a) => /^(credit|move):/.test(a.msg || '')))
 function report(v: Vault) {
   const sc: any = v.score || {}
   return { staked: +(fundedSol(v) || v.stakeSol || 0).toFixed(4), launchBuySol: +(v.launchSpend || 0).toFixed(4), launchTok: Math.round((v as any).launchTok || 0), soldSol: +(sc.captured || 0).toFixed(4), sales: sc.captures || 0,
-    dipSol: +(sc.dipBought || 0).toFixed(4), dips: sc.dips || 0, deskSol: +(sc.deskBought || 0).toFixed(4), taxSol: +(v.taxClaimed || 0).toFixed(4), devPaid: +(v.devPaid || 0).toFixed(4), fitted: !!(v as any).fittedAt, armedAt: v.armedAt || null }
+    dipSol: +(sc.dipBought || 0).toFixed(4), dips: sc.dips || 0, deskSol: +(sc.deskBought || 0).toFixed(4), taxSol: +(v.taxClaimed || 0).toFixed(4), devPaid: +(v.devPaid || 0).toFixed(4), fitted: booksMoved(v), armedAt: v.armedAt || null }
 }
-const pub = (v: Vault) => ({ report: report(v), paused: foreignPaused(v) ? (v as any)._foreignUntil : 0, sniper: (v as any).sniper || null, fitted: !!(v as any).fittedAt, id: v.id, pub: v.pub, paper: !!v.paper, venue: v.venue || 'pump', taxClaimed: v.taxClaimed || 0, image: v.image, uri: v.uri, vampFlag: !!v.vampFlag, permTax: v.permTax || 0, crowd: v.crowd ? { goalSol: v.crowd.goalSol, raised: +v.crowd.raised.toFixed(3), backers: Object.keys(v.crowd.contributors).length, expiresAt: v.crowd.expiresAt, refunded: !!v.crowd.refunded } : undefined, mint: v.mint, symbol: v.symbol, name: v.name, dev: v.dev, stakeSol: v.stakeSol, pct: v.pct, cut: v.cut, armed: v.armed, renounced: v.renounced, avgCost: v.avgCost, tokens: v.tokens, chest: v.chest, devPaid: v.devPaid, activity: v.activity.slice(0, 50), createdAt: v.createdAt, copyOf: v.copyOf, imported: !!v.imported, mode: v.mode || 'floor', ceiling: v.ceiling ?? R.MM_MAX_CAPTURE, score: v.score || { captured: 0, captures: 0, deskBought: 0, deskFills: 0, dipBought: 0, dips: 0, redeployed: 0, floor0: 0 }, floor: v.supply ? v.chest / v.supply : 0, live: liveReadout(v), holders: v.holders || null, feePaid: v.feePaid || 0, depositedTokens: v.depositedTokens || 0, funders: v.funders || {}, streamed: v.streamed || 0, redeemed: v.redeemed || 0, supply: v.supply || 1e9, deskBid: v.deskBid || 0, shared: !!v.shared, vaultBuySol: v.vaultBuySol ?? null, mm: { spent: v.mmSpent || 0, got: v.mmGot || 0, tok: v.mmTok || 0, cost: v.mmCost || 0, inv: v.invGot || 0, stopped: !!v.stoppedAt }, copies: Object.values(vaults).filter((c) => c.copyOf === v.mint && c.armed).map((c) => ({ mint: c.mint, symbol: c.symbol, pub: c.pub })) })
+const pub = (v: Vault) => ({ report: report(v), paused: foreignPaused(v) ? (v as any)._foreignUntil : 0, sniper: (v as any).sniper || null, fitted: booksMoved(v), id: v.id, pub: v.pub, paper: !!v.paper, venue: v.venue || 'pump', taxClaimed: v.taxClaimed || 0, image: v.image, uri: v.uri, vampFlag: !!v.vampFlag, permTax: v.permTax || 0, crowd: v.crowd ? { goalSol: v.crowd.goalSol, raised: +v.crowd.raised.toFixed(3), backers: Object.keys(v.crowd.contributors).length, expiresAt: v.crowd.expiresAt, refunded: !!v.crowd.refunded } : undefined, mint: v.mint, symbol: v.symbol, name: v.name, dev: v.dev, stakeSol: v.stakeSol, pct: v.pct, cut: v.cut, armed: v.armed, renounced: v.renounced, avgCost: v.avgCost, tokens: v.tokens, chest: v.chest, devPaid: v.devPaid, activity: v.activity.slice(0, 50), createdAt: v.createdAt, copyOf: v.copyOf, imported: !!v.imported, mode: v.mode || 'floor', ceiling: v.ceiling ?? R.MM_MAX_CAPTURE, score: v.score || { captured: 0, captures: 0, deskBought: 0, deskFills: 0, dipBought: 0, dips: 0, redeployed: 0, floor0: 0 }, floor: v.supply ? v.chest / v.supply : 0, live: liveReadout(v), holders: v.holders || null, feePaid: v.feePaid || 0, depositedTokens: v.depositedTokens || 0, funders: v.funders || {}, streamed: v.streamed || 0, redeemed: v.redeemed || 0, supply: v.supply || 1e9, deskBid: v.deskBid || 0, shared: !!v.shared, vaultBuySol: v.vaultBuySol ?? null, mm: { spent: v.mmSpent || 0, got: v.mmGot || 0, tok: v.mmTok || 0, cost: v.mmCost || 0, inv: v.invGot || 0, stopped: !!v.stoppedAt }, copies: Object.values(vaults).filter((c) => c.copyOf === v.mint && c.armed).map((c) => ({ mint: c.mint, symbol: c.symbol, pub: c.pub })) })
 export const vaultPct = (buySol: number) => Math.min(50, L.blockZero(0, buySol).vaultPct) // real curve: what the block-zero buy takes of supply (20–50% is the launch range)
 /** SOL the block-zero buy needs for `pct` of supply (binary search on the curve) */
 export function solForPct(pct: number, devSol = 0) { let lo = 0, hi = 500; for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (L.blockZero(devSol, mid).vaultPct > pct) hi = mid; else lo = mid } return +hi.toFixed(4) }
@@ -613,7 +628,7 @@ export async function withdrawPreview(id: string) {
   else if (vaultOps.get(v.id)) why = 'a withdrawal of this chest is already running'
   const sells = reclaim && v.tokens > 0.5
   const sol = +(reclaim ? chestOut + (sells ? tokensSol : 0) : Math.min(staked, chestOut)).toFixed(4)
-  if (!why && sol < 0.001) why = (v as any).fittedAt ? 'this chest is empty. Trades from outside the server moved SOL in the vault wallet, so the books were fitted to it — what this coin made is in the vault wallet, not booked to this chest' : 'this chest is empty — nothing to withdraw'
+  if (!why && sol < 0.001) why = booksMoved(v) ? 'this chest is empty. Trades from outside the server moved SOL in the vault wallet, so the books were fitted to it — what this coin made is in the vault wallet, not booked to this chest' : 'this chest is empty — nothing to withdraw'
   const out: any = { ok: !why, why, sol, chest: +v.chest.toFixed(4), tokens: v.tokens, tokensSol, sells, staked: +staked.toFixed(4), full: reclaim, to: v.dev }
   if (reclaim && v.shared) { const a = await sharedAudit().catch(() => null); if (a) out.wallet = { address: a.wallet, held: a.balanceSol, booked: a.ledgersSol, free: +Math.max(0, a.unattributedSol).toFixed(4) } }
   return out
@@ -691,7 +706,7 @@ export async function reconcile(id: string) {
   if ((v as any)._capBusy || inflight.has(v.id) || (v as any)._payPending || lateBooks.some((x) => x.id === v.id) || lateCredits.some((x) => x.id === v.id)) throw new Error('a trade or payout of this chest is still in flight — try again in a minute')
   const bal = await balanceSol(SHARED.publicKey.toBase58()); const others = Object.values(vaults).filter((x) => x.shared && !x.paper && x.id !== v.id).reduce((a, x) => a + Math.max(0, x.chest || 0), 0)
   const before = { chest: v.chest, tokens: v.tokens }
-  v.chest = +Math.max(0, bal - others - 0.01).toFixed(9); if (v.mint) v.tokens = (await tokenBalance(v.pub, v.mint)).ui; v.ledgerDirty = false
+  v.chest = +Math.max(0, bal - others - 0.01).toFixed(9); if (v.mint) v.tokens = (await tokenBalance(v.pub, v.mint)).ui; v.ledgerDirty = false; (v as any).reconciledAt = Date.now()
   const msg = `reconciled to the wallet: chest ${before.chest.toFixed(4)} → ${v.chest.toFixed(4)} SOL, coins ${Math.round(before.tokens)} → ${Math.round(v.tokens)} (wallet ${bal.toFixed(4)} SOL, other chests ${others.toFixed(4)})`
   v.activity.unshift({ t: Date.now(), kind: 'note', msg }); EV.log('vault', `${v.symbol || v.id} ${msg}`, { id, before, after: { chest: v.chest, tokens: v.tokens }, bal, others }); save()
   return { id, before, after: { chest: v.chest, tokens: v.tokens }, wallet: bal, others }

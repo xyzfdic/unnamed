@@ -257,3 +257,17 @@ test('the platform fee claim is skipped (one warning, nothing sent) when the vau
     C.conn.getBalance = async () => 1e9; assert.equal(await V.claimPlatformFees(true), 0); assert.equal(claimBuilt, 1, 'with SOL in the wallet the claim goes ahead')
   } finally { C.conn.getBalance = real; pendingFees = 0 }
 })
+
+test('the launch report hides the result when a chest holds less than its own books say (SOL left the wallet outside its trades)', async () => {
+  const { v, b } = await launch()
+  const ct = VersionedTransaction.deserialize(Buffer.from(b.txs[0], 'base64')); ct.sign([dev]); const vt = VersionedTransaction.deserialize(Buffer.from(b.vaultTx, 'base64'))
+  createSigs.length = 0; const cs = land(ct, { [DEVPK]: -(STAKE + 0.52), [BANKY]: +STAKE }); land(vt, { [BANKY]: -(b.vaultSpend + 0.005) }); createSigs.push(cs)
+  poolLive = true; vaultTokens = 197e6
+  const real = C.conn.getBalance; C.conn.getBalance = async () => 1000e9   // a wallet well above the books: no fitting in this test
+  try { await V.arm(v.id, MINT, 'BANK', 'Bank', { sessionWallet: DEVPK }, cs) } finally { C.conn.getBalance = real; poolLive = false; createSigs.length = 0 }
+  const id = v.id; assert.equal(V.list().find((x) => x.id === id).report.fitted, false, 'a fresh chest\'s books add up'); const raw = V._get(id); const keep = raw.score ? { ...raw.score } : null
+  raw.score = { ...(raw.score || { captured: 0, captures: 0, deskBought: 0, deskFills: 0, dipBought: 0, dips: 0, redeployed: 0, floor0: 0 }) }; raw.score.captured += 5   // books: +5 SOL sold, wallet never got it
+  try { const p = V.list().find((x) => x.id === id); assert.equal(p.report.fitted, true); assert.equal(p.fitted, true) }
+  finally { raw.score = keep }
+  assert.equal(V.list().find((x) => x.id === id).report.fitted, false)
+})
