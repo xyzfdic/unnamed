@@ -1,21 +1,12 @@
-// read-only: every chest the live server runs (newest first) with its numbers, the coin's price now, its sniper report; the shared wallet
-// audit; and the last events about launches / foreign trades / book fits
-const S = 'https://unnamed-server.onrender.com'; const AK = process.env.ADMIN_KEY || ''
-const j = (p: string) => fetch(S + p, { signal: AbortSignal.timeout(20000) }).then((r) => r.json()).catch((e) => ({ err: String(e) }))
-const h: any = await j('/health'); console.log('HEALTH', h.commit, h.ok)
-const vs: any = await j('/vaults'); const list = (Array.isArray(vs) ? vs : []).sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))
-for (const v of list) {
-  const m: any = v.mint ? await j('/market/' + v.mint) : {}
-  const px = m?.priceSol || 0; const worth = (v.chest || 0) + (v.tokens || 0) * px
-  const acts = v.activity || []; const kinds: Record<string, number> = {}; for (const a of acts) kinds[a.kind] = (kinds[a.kind] || 0) + (a.sol || 0)
-  console.log('VAULT', JSON.stringify({ id: v.id, symbol: v.symbol, name: v.name, venue: v.venue, mint: v.mint, dev: v.dev, created: new Date(v.createdAt || 0).toISOString(), armed: v.armed, fitted: v.fitted,
-    stake: v.stakeSol, launchBuy: v.vaultBuySol, chest: +(+v.chest).toFixed(4), tokens: Math.round(v.tokens || 0), priceSol: px, mcapSol: px ? +(px * 1e9).toFixed(1) : null, bondedOrLiq: m?.liqSol ?? null,
-    worthSol: +worth.toFixed(4), resultSol: +(worth - (v.stakeSol || 0)).toFixed(4), taxClaimed: v.taxClaimed, score: v.score, mm: v.mm, devPaid: v.devPaid,
-    sniper: v.sniper ? { buys: v.sniper.buys, sol: v.sniper.sol, wallets: v.sniper.wallets, launchBlockSol: v.sniper.launchBlockSol, chestSold: v.sniper.chestSold } : null,
-    activityKinds: kinds, firstActivity: acts.length ? new Date(acts[acts.length - 1].t).toISOString() : null, notes: acts.filter((a: any) => a.kind === 'note' && /paused|fitted|stop|failed/.test(a.msg || '')).slice(0, 4).map((a: any) => String(a.msg).slice(0, 140)) }))
-}
-const w: any = await j('/admin/wallet?key=' + AK); console.log('AUDIT', JSON.stringify(w).slice(0, 500))
-const e: any = await j('/admin/events?key=' + AK + '&since=' + (Date.now() - 4 * 86400_000))
-for (const x of e.events || []) if (/armed|sniper report|did not sign|fitted|launch|refus|stake booked|switched off|reconciled/i.test(x.msg || '') && !/ capture /.test(x.msg || '')) console.log('EV', new Date(x.t).toISOString().slice(5, 19), x.kind, String(x.msg || '').slice(0, 220))
-console.log('EVSTATS', JSON.stringify(e.stats || {}).slice(0, 300), 'n', (e.events || []).length, 'oldest', e.events?.[0] ? new Date(e.events[0].t).toISOString() : null)
-process.exit(0)
+// read-only: wait for the live server to run the new commit, then print health, the live chests, one withdraw preview and the vault wallet audit
+const S = 'https://unnamed-server.onrender.com'; const want = 'df5e3a6b'; const K = process.env.ADMIN_KEY || ''
+const get = async (p: string) => { try { return await (await fetch(S + p, { signal: AbortSignal.timeout(20000) })).json() } catch (e: any) { return { err: String(e?.message || e) } } }
+const t0 = Date.now(); let h: any = null
+while (Date.now() - t0 < 660_000) { h = await get('/health'); if (h?.commit === want) break; await new Promise((r) => setTimeout(r, 15000)) }
+console.log('HEALTH after', Math.round((Date.now() - t0) / 1000), 's', JSON.stringify({ commit: h?.commit, ok: h?.ok, vaultWallet: h?.vaultWallet, alerts: h?.alerts, stream: h?.stream }))
+const vs: any[] = await get('/vaults'); console.log('VAULTS', Array.isArray(vs) ? vs.length : JSON.stringify(vs))
+if (Array.isArray(vs)) { for (const v of vs) console.log(' ', v.symbol, v.venue, 'chest', v.chest, 'tokens', Math.round(v.tokens), 'paused', v.paused, 'report', JSON.stringify(v.report)); if (vs[0]) console.log('PREVIEW', vs[0].symbol, JSON.stringify(await get('/vault/withdraw-preview?id=' + encodeURIComponent(vs[0].id)))) }
+console.log('WALLET', JSON.stringify(await get('/admin/wallet?key=' + encodeURIComponent(K))))
+const ev: any = await get('/admin/events?key=' + encodeURIComponent(K) + '&since=' + (Date.now() - 2 * 3600e3))
+const es: any[] = ev?.events || []; console.log('EVENTS 2h', es.length, 'errors', es.filter((e) => e.kind === 'error').length)
+for (const e of es.slice(-25)) console.log(' ', new Date(e.t).toISOString().slice(11, 19), e.kind, String(e.msg).slice(0, 200))
