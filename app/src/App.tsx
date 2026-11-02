@@ -4,7 +4,8 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js'
 import * as K from './lib/desk'
 import { setLaunchCurve } from './lib/protocol'
-import { DeskPage, VaultPage, MinePage, LeaderboardPage, ImportPage, RfqPing } from './components/Desk'
+import { DeskPage, VaultPage, MinePage, LeaderboardPage, ImportPage, RfqPing, plainRefundErr } from './components/Desk'
+import Launched, { type LaunchedInfo } from './components/Launched'
 import { due, removeOrder, loadOrders } from './lib/orders'
 import { confirmByPolling } from './lib/rpc'
 import WalletPanel from './components/WalletPanel'
@@ -67,7 +68,7 @@ export default function App() {
   const ws = useWalletState(activeKey, rk)
   const coinHolding = useMintHolding(activeKey, page === 'coin' ? arg || null : null, rk)
   const pendingVault = useRef<{ v: K.VaultPub; dev: string; stake: number; venue: string } | null>(null)
-  const [lat, setLat] = useState<number | null>(null); const [busy, setBusy] = useState(''); const [launch, setLaunch] = useState(false); const openLaunch = () => { if (STORE_SAFE) { toast({ kind: 'info', title: 'Launch coins on app.banker.cash', rows: [['In the app', 'buy, sell and track coins']] }); return } setLaunch(true) }; const [llp, setLlp] = useState<K.LLPlatform | null>(null); useEffect(() => { K.llPlatform().then(setLlp).catch(() => {}) }, [launch]); const [more, setMore] = useState(false); const [q, setQ] = useState(''); const [results, setResults] = useState<Coin[]>([])
+  const [lat, setLat] = useState<number | null>(null); const [busy, setBusy] = useState(''); const [launch, setLaunch] = useState(false); const [launched, setLaunched] = useState<LaunchedInfo | null>(null); const [vaultWallet, setVaultWallet] = useState(''); const openLaunch = () => { if (STORE_SAFE) { toast({ kind: 'info', title: 'Launch coins on app.banker.cash', rows: [['In the app', 'buy, sell and track coins']] }); return } setLaunch(true) }; const [llp, setLlp] = useState<K.LLPlatform | null>(null); useEffect(() => { K.llPlatform().then(setLlp).catch(() => {}) }, [launch]); const [more, setMore] = useState(false); const [q, setQ] = useState(''); const [results, setResults] = useState<Coin[]>([])
   const [ledgerV, setLedgerV] = useState(0)
   const ledger = useMemo(() => loadLedger(ws.owner), [ws.owner, ledgerV])
   const freshMints = useMemo(() => fresh.list.slice(0, 30).map((t) => t.mint), [fresh.list])
@@ -242,6 +243,8 @@ export default function App() {
     try { const before = ws.sol || 0; const sig = await T.sell({ ...x, depthSol: c.depthSol, venue: c.venue }, c.mint, frac, BigInt(h.raw), c.onCurve, (h.amount * (c.raw?.priceNative ? +c.raw.priceNative : 0)) * frac); const after = await connection.getBalance(x.owner).then((b) => b / 1e9).catch(() => before); recordSell(ws.owner, c.mint, c.symbol, frac, Math.max(0, after - before), sig); setLedgerV((v) => v + 1); toast({ kind: 'ok', title: `Sold ${Math.round(frac * 100)}% ${c.symbol}`, rows: [['Landed', landing()], ['Received', '≈ ' + S(Math.max(0, after - before)) + ' SOL'], ['Tx', short(sig, 6)]], href: solscan(sig) }); setTimeout(() => setRk((k) => k + 1), 1500) }
     catch (e: any) { toast({ kind: 'err', title: 'Sell failed', rows: [['Reason', String(e?.message || e).slice(0, 120)]] }) } finally { setBusy('') }
   }
+  // the vault wallet, read again each time the launch form opens: the form refuses it as the paying wallet
+  useEffect(() => { if (!launch) return; K.health().then((h: any) => setVaultWallet(h?.vaultWallet || '')).catch(() => {}) }, [launch])
   const onLaunch = async (meta: any, dev: number, stake: number, copyOf?: string, mode: 'floor' | 'mm' = 'mm', ceiling = 0.3, venue: 'launchlab' | 'pump' = 'launchlab', permTax = false, vaultBuy?: number, targetPct?: number) => {
     const buy = +(vaultBuy ?? stake * 0.5).toFixed(4)
     const x = ctx(); if (!x) return needWallet()
@@ -290,6 +293,7 @@ export default function App() {
       if (r.already) toast({ kind: 'ok', title: `${meta.symbol} was already live`, rows: [['Mint', short(mint, 6)], ['Note', 'your earlier attempt landed — opening it, no second coin']] })
       else toast({ kind: 'ok', title: `${meta.symbol} is live${venue === 'launchlab' ? ' on BANKER' : ' on pump'}${bundled ? ' · vault in block zero' : ''}`, rows: [['Mint', short(mint, 6)], ['Dev buy', S(dev) + ' SOL'], ...(r.fundSol ? [['Stake', S(r.fundSol) + ' SOL · same signature']] as [string, string][] : [])], href: sig ? solscan(sig) : undefined })
       go('coin/' + mint)
+      if (!r.already) setLaunched({ mint, symbol: meta.symbol, venue, vaultId: vault?.id, sig: sig || undefined, at: Date.now() })
       if (vault) {
         try { setBusy('Arming vault…'); const v = await K.withDevAuth(signMsg, 'arm', vault.id, mint, (au) => K.vaultArm(vault.id, mint, meta.symbol, meta.name, au!, r.fundSol && sig ? sig : undefined)); setVaultV((n) => n + 1); toast({ kind: 'ok', title: `Chest is on · aiming for ${v.pct}% of coins`, rows: [['Chest', S(v.chest) + ' SOL'], ['Vault', short(v.pub, 6)]] }) }
         catch (e: any) { toast({ kind: 'err', title: 'Your coin is live · the chest switches on by itself in a few seconds', rows: [['Reason', String(e?.message || e).slice(0, 120)], ['Vault address', vault.pub]] }) }
@@ -302,7 +306,7 @@ export default function App() {
   const onAttach = async (c: Coin) => { if (!connected) return needWallet(); try { setBusy('Switching on the chest…'); const v = await K.withDevAuth(signMsg, 'attach', 'attach', c.mint, (au) => K.vaultAttach(ws.owner, c.mint, c.symbol, c.name || '', au)); setVaultV((n) => n + 1); toast({ kind: 'ok', title: `${c.symbol} has a chest now`, rows: [['Fills from', '2% of every trade, from the next one'], ['Chest', short(v.pub, 6)]] }) } catch (e: any) { toast({ kind: 'err', title: 'Could not switch on the chest', rows: [['Reason', String(e?.message || e).slice(0, 140)]] }) } finally { setBusy('') } }
   // a launch whose coin went out but whose arm never ran (phantom blocked the message signature, bundle route down, tab closed): arm it from the Vault page
   const onArm = async (v: K.VaultPub) => { if (!v.mint) return; try { setBusy('Arming vault…'); const r = await K.withDevAuth(signMsg, 'arm', v.id, v.mint, (au) => K.vaultArm(v.id, v.mint!, v.symbol || '', v.name || '', au!)); setVaultV((n) => n + 1); toast({ kind: 'ok', title: `Chest is on · aiming for ${r.pct}% of coins`, rows: [['Chest', S(r.chest) + ' SOL']] }) } catch (e: any) { toast({ kind: 'err', title: 'Arm failed', rows: [['Reason', String(e?.message || e).slice(0, 140)]] }) } finally { setBusy('') } }
-  const onRefund = async (v: K.VaultPub) => { try { setBusy(v.armed ? 'Selling the vault and withdrawing…' : 'Refunding stake…'); const r = await K.withDevAuth(signMsg, 'refund', v.id, v.mint || 'none', (a) => K.vaultRefund(v.id, a!)); setVaultV((n) => n + 1); toast({ kind: 'ok', title: `${v.armed ? 'Withdrawn' : 'Stake refunded'} · ${S(r.sol)} SOL`, rows: [['To', short(ws.owner, 6)], ['Tx', short(r.sig, 6)]], href: solscan(r.sig) }); setTimeout(() => setRk((k) => k + 1), 1500) } catch (e: any) { toast({ kind: 'err', title: 'Refund failed', rows: [['Reason', String(e?.message || e).slice(0, 140)]] }) } finally { setBusy('') } }
+  const onRefund = async (v: K.VaultPub) => { try { setBusy(v.armed ? 'Selling the vault and withdrawing…' : 'Refunding stake…'); const r = await K.withDevAuth(signMsg, 'refund', v.id, v.mint || 'none', (a) => K.vaultRefund(v.id, a!)); setVaultV((n) => n + 1); toast({ kind: 'ok', title: `${v.armed ? 'Withdrawn' : 'Stake refunded'} · ${S(r.sol)} SOL`, rows: [['To', short(ws.owner, 6)], ['Tx', short(r.sig, 6)]], href: solscan(r.sig) }); setTimeout(() => setRk((k) => k + 1), 1500) } catch (e: any) { toast({ kind: 'err', title: v.armed ? 'Withdraw failed' : 'Refund failed', rows: [['Why', plainRefundErr(String(e?.message || e)).slice(0, 220)]] }) } finally { setBusy('') } }
   sellRef.current = onSell
   const quick = (c: Coin) => { if (!connected) return needWallet(); onBuy(c, settings.quickBuy) }
   const buyUsd = (c: Coin, usd: number) => { if (!connected) return needWallet(); if (!solPrice) return; onBuy(c, +(usd / solPrice).toFixed(4)) }
@@ -377,7 +381,8 @@ export default function App() {
       <div className="row" style={{ marginTop: 6 }}><button className="btn" onClick={() => gateQ.ok(false)}>Hold</button><span className="sp" /><button className="btn pri" onClick={() => gateQ.ok(true)}>Fill at new price</button></div>
     </div></div>}
     {wp && <WalletPanel onClose={() => setWp(false)} burner={burner} setBurner={setBurner} mode={mode} setMode={setMode} sol={ws.sol} onWithdraw={onWithdraw} />}
-    {launch && <Launch onClose={() => setLaunch(false)} onLaunch={onLaunch} busy={busy} connected={connected} sol={ws.sol} wallet={ws.owner} walletKind={mode === 'burner' ? 'in-app' : (wallet.wallet?.adapter?.name?.toLowerCase() as any) || 'wallet'} needWallet={needWallet} taxBps={llp?.taxBps} permTaxBps={llp?.permTaxBps} platformReady={!!llp?.chain?.exists} />}
+    {launch && <Launch onClose={() => setLaunch(false)} onLaunch={onLaunch} busy={busy} connected={connected} sol={ws.sol} wallet={ws.owner} walletKind={mode === 'burner' ? 'in-app' : (wallet.wallet?.adapter?.name?.toLowerCase() as any) || 'wallet'} needWallet={needWallet} taxBps={llp?.taxBps} permTaxBps={llp?.permTaxBps} platformReady={!!llp?.chain?.exists} vaultWallet={vaultWallet} />}
+    {launched && <Launched info={launched} onClose={() => setLaunched(null)} />}
     <div className="toasts" style={{ bottom: 'auto', top: 64 }}>{pings.map((r) => <RfqPing key={r.id} r={r} bidder={bidder} onRespond={onRespond} onDismiss={() => setPings((l) => l.filter((x) => x.id !== r.id))} busy={busy} />)}</div>
     <Toasts />
   </div>

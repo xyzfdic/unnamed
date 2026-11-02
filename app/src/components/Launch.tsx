@@ -5,10 +5,11 @@ import type { CreateMeta } from '../lib/pumpportal'
 import * as D from '../lib/dex'
 import { ModePicker } from './Desk'
 
+const short4 = (a: string) => a.slice(0, 4) + '…' + a.slice(-4)
 /** '@handle', 'x.com/handle', 'site.com' or a full link → a full https link */
 const link = (v: string, base: string) => { v = v.trim(); if (!v) return ''; if (/^https?:\/\//i.test(v)) return v; if (v.startsWith('@')) return base + v.slice(1); if (/\./.test(v)) return 'https://' + v.replace(/^\/+/, ''); return base + v }
 export type Venue = 'launchlab' | 'pump'
-type Props = { wallet?: string; walletKind?: 'in-app' | 'phantom' | 'wallet'; onClose: () => void; onLaunch: (m: CreateMeta, devBuy: number, stake: number, copyOf?: string, mode?: 'floor' | 'mm', ceiling?: number, venue?: Venue, permTax?: boolean, vaultBuy?: number, targetPct?: number) => void; taxBps?: number; permTaxBps?: number; platformReady?: boolean; busy: string; connected: boolean; sol: number | null; needWallet: () => void }
+type Props = { wallet?: string; walletKind?: 'in-app' | 'phantom' | 'wallet'; onClose: () => void; onLaunch: (m: CreateMeta, devBuy: number, stake: number, copyOf?: string, mode?: 'floor' | 'mm', ceiling?: number, venue?: Venue, permTax?: boolean, vaultBuy?: number, targetPct?: number) => void; taxBps?: number; permTaxBps?: number; platformReady?: boolean; vaultWallet?: string; busy: string; connected: boolean; sol: number | null; needWallet: () => void }
 /** where a launch is, from the status line the launch flow reports: chest → upload → build → sign → land. The modal closes once the coin is live. */
 const STEPS: [string, RegExp][] = [['Chest', /creating vault|funding vault/i], ['Upload', /uploading/i], ['Build', /building/i], ['Sign', /^sign|approve/i], ['Land', /sending|resending|landing|confirming|checking|rebuilding|dropped|took too long/i]]
 function Progress({ busy }: { busy: string }) {
@@ -24,18 +25,20 @@ export default function Launch(p: Props) {
   const [name, setName] = useState(''); const [symbol, setSymbol] = useState(''); const [desc, setDesc] = useState(''); const [file, setFile] = useState<File | undefined>()
   const [tw, setTw] = useState(''); const [tg, setTg] = useState(''); const [web, setWeb] = useState('')
   const [dev, setDev] = useState(0.5); const [pct, setPct] = useState(10); const [buyNow, setBuyNow] = useState(true); const [chest, setChest] = useState(0.5); const [mode, setMode] = useState<'floor' | 'mm'>('mm'); const [ceiling, setCeiling] = useState(0.3); const [adv, setAdv] = useState(false)
-  const [cq, setCq] = useState(''); const [cres, setCres] = useState<D.Coin[]>([]); const [copyOf, setCopyOf] = useState<D.Coin | null>(null); const [venue, setVenue] = useState<Venue>('launchlab'); const [permTax, setPermTax] = useState(false)
+  const [cq, setCq] = useState(''); const [cres, setCres] = useState<D.Coin[]>([]); const [copyOf, setCopyOf] = useState<D.Coin | null>(null); const [venue, setVenueRaw] = useState<Venue>(() => { try { const v = localStorage.getItem('launch.venue'); return v === 'pump' || v === 'launchlab' ? v : 'launchlab' } catch { return 'launchlab' } }); const setVenue = (v: Venue) => { setVenueRaw(v); try { localStorage.setItem('launch.venue', v) } catch {} }; const [permTax, setPermTax] = useState(false)
   React.useEffect(() => { if (!cq.trim() || copyOf) { setCres([]); return } const t = setTimeout(() => D.search(cq).then((r) => setCres(r.slice(0, 5))).catch(() => {}), 300); return () => clearTimeout(t) }, [cq, copyOf])
   const ok = name.trim().length > 1 && symbol.trim().length > 0 && symbol.length <= 10 && !!file
   const feeOff = venue === 'launchlab' ? 25 + (p.taxBps ?? 200) : 0
   const taxFunded = venue === 'launchlab' && !buyNow
   const vaultBuy = taxFunded ? 0 : solForPct(pct, dev, feeOff); const stake = +(vaultBuy + chest).toFixed(3)
   const total = dev + stake + (venue === 'launchlab' ? 0.1 : 0.02)
+  const isVaultWallet = !!p.wallet && !!p.vaultWallet && p.wallet === p.vaultWallet
   return <div className="modal" onClick={p.onClose}><div className="box" onClick={(e) => e.stopPropagation()}>
-    <div className="row"><h2>Launch a coin</h2><span className="sp" /><span className="tag live">{venue === 'launchlab' ? `${((p.taxBps ?? 200) / 100).toFixed(1)}% of trades → chest` : 'pump.fun'}</span></div>
-    <div className="venue">
-      <button className={venue === 'launchlab' ? 'on' : ''} onClick={() => setVenue('launchlab')}><b>BANKER launchpad</b><span>{p.platformReady === false ? `setup not finished (see Settings) — you can launch, the ${((p.taxBps ?? 200) / 100).toFixed(1)}% fee starts once it is` : `${((p.taxBps ?? 200) / 100).toFixed(1)}% of every trade goes into the coin's chest · the chest is on from the first second`}</span></button>
-      <button className={venue === 'pump' ? 'on' : ''} onClick={() => setVenue('pump')}><b>pump.fun</b><span>bigger crowd · no trading fee to fill the chest · no copycat protection</span></button>
+    <div className="row"><h2>Launch a coin</h2><span className="sp" /><span className="tag live">{venue === 'launchlab' ? `BANKER launchpad · ${((p.taxBps ?? 200) / 100).toFixed(1)}% of trades → chest` : 'on pump.fun'}</span></div>
+    <div className="lbl" style={{ marginBottom: -4 }}>Where it launches</div>
+    <div className="venue" role="radiogroup" aria-label="Where it launches">
+      <button role="radio" aria-checked={venue === 'launchlab'} className={venue === 'launchlab' ? 'on' : ''} onClick={() => setVenue('launchlab')}><b>{venue === 'launchlab' ? '● ' : '○ '}BANKER launchpad</b><span>{p.platformReady === false ? `setup not finished (see Settings) — you can launch, the ${((p.taxBps ?? 200) / 100).toFixed(1)}% fee starts once it is` : `runs on Raydium LaunchLab — NOT on pump.fun · ${((p.taxBps ?? 200) / 100).toFixed(1)}% of every trade goes into the coin's chest`}</span></button>
+      <button role="radio" aria-checked={venue === 'pump'} className={venue === 'pump' ? 'on' : ''} onClick={() => setVenue('pump')}><b>{venue === 'pump' ? '● ' : '○ '}pump.fun</b><span>trades on pump.fun's curve, shows on pump.fun · bigger crowd · the chest sells a slice into the snipers · no trading fee to fill the chest</span></button>
     </div>
     {venue === 'launchlab' && (p.permTaxBps ?? 0) > 0 && <label className="row" style={{ gap: 8, fontSize: 12, marginBottom: 8 }}><input type="checkbox" checked={permTax} onChange={(e) => setPermTax(e.target.checked)} /> {((p.permTaxBps ?? 100) / 100).toFixed(1)}% on every transfer, forever (token-2022)</label>}
     <div className="two">
@@ -67,10 +70,11 @@ export default function Launch(p: Props) {
       {adv && <div style={{ marginTop: 8 }}><ModePicker mode={mode} ceiling={ceiling} onChange={(m, c) => { setMode(m); setCeiling(c) }} compact /></div>}{!adv && <div className="nm">Market maker · capture ceiling {Math.round(ceiling * 100)}%</div>}</div>
     <div className="kv"><span>Total to launch</span><b className="num">{S(total, 2)} SOL</b></div>
     <div className="nm">your buy {S(dev, 2)}{vaultBuy ? ` + chest's buy ${S(vaultBuy, 2)}` : ''} + chest {S(chest, 2)} + {venue === 'launchlab' ? '0.1 network setup' : '0.02 network fees'}</div>
+    {isVaultWallet && <div className="note" role="alert" style={{ borderColor: 'var(--dn)', color: 'var(--dn)' }}><b>This is the vault wallet ({short4(p.vaultWallet!)}).</b> It holds every chest, so a launch from it can't be booked. Switch to your own wallet in Phantom (tap the account name at the top), then reopen this.</div>}
     <div className="kv"><span>Paying from</span><b className="num">{p.wallet ? p.wallet.slice(0, 4) + '…' + p.wallet.slice(-4) + (p.walletKind ? ' · ' + p.walletKind : '') : '—'} · {p.sol == null ? '—' : S(p.sol) + ' SOL'}</b></div>
     <div className="nm">{chest > 0 ? 'Your wallet asks you to approve once: the coin, your buy and the chest\'s stake go out together, so nothing is spent unless the launch lands. Then the chest switches itself on. ' : 'Your wallet asks you to approve once. '}Phantom may warn that this site is new. That's about the site's age, not this transaction.</div>
     {p.busy && <Progress busy={p.busy} />}
     <div className="row"><button className="btn" onClick={p.onClose}>Cancel</button><span className="sp" />
-      <button className="btn pri" disabled={!!p.busy || (p.connected && (!ok || (p.sol != null && total > p.sol)))} onClick={() => !p.connected ? p.needWallet() : p.onLaunch({ name: name.trim(), symbol: symbol.trim(), description: desc.trim(), file, twitter: link(tw, 'https://x.com/') || undefined, telegram: link(tg, 'https://t.me/') || undefined, website: link(web, 'https://') || undefined }, dev, stake, copyOf?.mint, mode, ceiling, venue, venue === 'launchlab' && permTax, vaultBuy, pct)}>{p.busy || (!p.connected ? 'Connect wallet' : 'Create coin')}</button></div>
+      <button className="btn pri" disabled={!!p.busy || isVaultWallet || (p.connected && (!ok || (p.sol != null && total > p.sol)))} onClick={() => !p.connected ? p.needWallet() : p.onLaunch({ name: name.trim(), symbol: symbol.trim(), description: desc.trim(), file, twitter: link(tw, 'https://x.com/') || undefined, telegram: link(tg, 'https://t.me/') || undefined, website: link(web, 'https://') || undefined }, dev, stake, copyOf?.mint, mode, ceiling, venue, venue === 'launchlab' && permTax, vaultBuy, pct)}>{p.busy || (!p.connected ? 'Connect wallet' : isVaultWallet ? 'Switch wallet first' : venue === 'pump' ? 'Launch on pump.fun' : 'Launch on BANKER launchpad')}</button></div>
   </div></div>
 }

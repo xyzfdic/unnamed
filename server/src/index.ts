@@ -13,6 +13,7 @@ import * as D from './desk.ts'
 import * as V from './vault.ts'
 import * as INV from './invite.ts'
 import * as EV from './events.ts'
+import * as AL from './alert.ts'
 import * as MP from './mintpool.ts'
 import { TREASURY, RPC } from './chain.ts'
 import * as R from './rules.ts'
@@ -42,7 +43,7 @@ const server = createServer(async (req, res) => {
   try {
     // pubkey-shaped path params only
     for (const seg of [p.startsWith('/book/') && p.slice(6), p.startsWith('/vault/mint/') && p.slice(12), p.startsWith('/family/') && p.slice(8), p.startsWith('/vamp/') && p.slice(6), p.startsWith('/dev/') && p.slice(5), p.startsWith('/import/quote/') && p.slice(14)]) if (seg && !isPk(seg)) throw new Error('bad address')
-    if (p === '/health') return json(res, 200, { ok: true, commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 8) || undefined, gate: INV.GATE, invites: INV.stats(), rpc: RPC.replace(/api-key=.*/, 'api-key=…'), treasury: TREASURY, desk: D.stats(), vaults: V.list().length, vaultWallet: V.sharedPub(), mints: MP.stats(), stream: streamStats(), curve: LL.curveInfo(), beta: { deskOnly: DESK_ONLY, paper: V.PAPER, importFeeSol: R.IMPORT_FEE_SOL, importSeedSol: R.IMPORT_SEED_SOL, keeper: KEEP.status(), feeBps: R.CROSS_FEE_BPS, profitOnly: process.env.PROFIT_ONLY === '1', testReclaim: process.env.TEST_RECLAIM === '1', mmBuys: process.env.MM_BUYS !== '0' || process.env.MM_ON === '1', deskBid: process.env.DESK_BID !== '0', maxChestSol: V.MAX_CHEST_SOL, pumpStream: !!process.env.PUMPPORTAL_KEY, ipfs: process.env.PINATA_JWT ? 'pinata' : 'self-hosted', landing: process.env.JITO === '1' ? 'jito' : C.FAST ? 'sender' : 'rpc', lastRoute: C.lastRoute } })
+    if (p === '/health') return json(res, 200, { ok: true, vaultWallet: V.sharedPub() || undefined, alerts: AL.enabled() ? (AL.chat() ? 'paired' : 'waiting for /start') : 'off', commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 8) || undefined, gate: INV.GATE, invites: INV.stats(), rpc: RPC.replace(/api-key=.*/, 'api-key=…'), treasury: TREASURY, desk: D.stats(), vaults: V.list().length, vaultWallet: V.sharedPub(), mints: MP.stats(), stream: streamStats(), curve: LL.curveInfo(), beta: { deskOnly: DESK_ONLY, paper: V.PAPER, importFeeSol: R.IMPORT_FEE_SOL, importSeedSol: R.IMPORT_SEED_SOL, keeper: KEEP.status(), feeBps: R.CROSS_FEE_BPS, profitOnly: process.env.PROFIT_ONLY === '1', testReclaim: process.env.TEST_RECLAIM === '1', mmBuys: process.env.MM_BUYS !== '0' || process.env.MM_ON === '1', deskBid: process.env.DESK_BID !== '0', maxChestSol: V.MAX_CHEST_SOL, pumpStream: !!process.env.PUMPPORTAL_KEY, ipfs: process.env.PINATA_JWT ? 'pinata' : 'self-hosted', landing: process.env.JITO === '1' ? 'jito' : C.FAST ? 'sender' : 'rpc', lastRoute: C.lastRoute } })
     if (p === '/ask/quote' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await D.askQuote(b.askId, b.buyer, b.sol ? +b.sol : undefined)) }
     if (p === '/ask/fill' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await D.askFill(b.askId, b.buyer, b.tx, b.sol ? +b.sol : undefined)) }
     if (p === '/myasks') { const me = u.searchParams.get('me') || ''; if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(me)) return json(res, 400, { error: 'me' }); return json(res, 200, D.myAsks(me)) }
@@ -92,6 +93,7 @@ const server = createServer(async (req, res) => {
     if (p.startsWith('/vault/mint/')) return json(res, 200, V.byMint(p.slice(12)))
     if (p.startsWith('/vault/') && req.method === 'GET') return json(res, 200, V.get(p.slice(7)))
     if (p === '/vault/create' && req.method === 'POST') { const b = await readBody(req); if (!(b.stakeSol > 0)) throw new Error('stake required'); if (sessionWallet && b.dev !== sessionWallet) return json(res, 403, { error: 'a vault is created for the signed-in wallet' }); return json(res, 200, V.create(b.dev, +b.stakeSol, b.copyOf, b.mode === 'floor' ? 'floor' : 'mm', b.ceiling != null ? +b.ceiling : undefined, b.venue === 'launchlab' ? 'launchlab' : 'pump', b.vaultBuySol != null ? +b.vaultBuySol : undefined, b.targetPct != null ? +b.targetPct : undefined)) }
+    if (p === '/vault/withdraw-preview' && req.method === 'GET') return json(res, 200, await V.withdrawPreview(String(u.searchParams.get('id') || '')))
     if (p === '/vault/refund' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await V.refund(b.id, { ...(b.auth || {}), sessionWallet })) }
     if (p === '/vault/fund' && req.method === 'POST') { const b = await readBody(req); const v0 = V.devOf(b.id); if (sessionWallet && v0 && v0 !== sessionWallet) return json(res, 403, { error: 'not your vault' }); return json(res, 200, await V.fund(b.id, b.sig)) }
     if (p === '/vault/arm' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await V.arm(b.id, b.mint, b.symbol || '', b.name || '', { ...(b.auth || {}), sessionWallet }, b.fundSig)) }
@@ -165,3 +167,13 @@ if (!DESK_ONLY) { V.load(); V.startStream(); setInterval(() => V.tick().catch(()
 else console.log('desk-only mode: vault/import routes disabled')
 if (process.env.VAMPS !== '0') VM.start()
 server.listen(PORT, () => console.log(`banker server on :${PORT} · treasury ${TREASURY}`))
+// Telegram alerts (TELEGRAM_BOT_TOKEN in the Render env): /status answers with the vault wallet's split and every live chest
+if (!DESK_ONLY && AL.enabled()) {
+  AL.setStatus(async () => {
+    const a = await V.sharedAudit().catch(() => null); const live = V.list()
+    const head = a ? `<b>vault wallet</b> ${a.balanceSol.toFixed(4)} SOL · booked to chests ${a.ledgersSol.toFixed(4)} · in no chest ${a.unattributedSol.toFixed(4)}` : 'vault wallet: unreadable right now'
+    const rows = live.slice(0, 15).map((v) => `${AL.esc(v.symbol || v.id)} · chest ${v.chest.toFixed(3)} SOL · ${Math.round(v.tokens).toLocaleString('en-US')} coins · sold ${(v.score?.captured || 0).toFixed(2)} SOL into buys`)
+    return [head, `${live.length} live chest(s)`, ...rows].join('\n')
+  })
+  AL.start().catch(() => {})
+}

@@ -15,6 +15,7 @@ import * as KEEP from './keeper.ts'
 import * as VM from './vamp.ts'
 import * as MM from './mm.ts'
 import * as EV from './events.ts'
+import * as AL from './alert.ts'
 import { taxWeights, taxCredits } from './tax.ts'
 import * as MP from './mintpool.ts'
 import * as PF from './pumpfast.ts'
@@ -190,7 +191,15 @@ export async function fitLedgers(force = false) {
 }
 /** SOL in the shared wallet that no ledger claims (dust, fees paid by the platform, unattributed deposits). Never spent. */
 export async function sharedAudit() { if (!SHARED) return null; const bal = await balanceSol(SHARED.publicKey.toBase58()); const ledgers = Object.values(vaults).filter((v) => v.shared && !v.paper).reduce((a, v) => a + (v.chest || 0), 0); if (bal - ledgers < -0.01) EV.log('error', `ledger drift: wallet ${bal.toFixed(4)} < ledgers ${ledgers.toFixed(4)} — a spend was not booked`, { bal, ledgers }); return { wallet: SHARED.publicKey.toBase58(), balanceSol: +bal.toFixed(6), ledgersSol: +ledgers.toFixed(6), unattributedSol: +(bal - ledgers).toFixed(6), vaults: Object.values(vaults).filter((v) => v.shared && v.armed).length } }
-const pub = (v: Vault) => ({ sniper: (v as any).sniper || null, fitted: !!(v as any).fittedAt, id: v.id, pub: v.pub, paper: !!v.paper, venue: v.venue || 'pump', taxClaimed: v.taxClaimed || 0, image: v.image, uri: v.uri, vampFlag: !!v.vampFlag, permTax: v.permTax || 0, crowd: v.crowd ? { goalSol: v.crowd.goalSol, raised: +v.crowd.raised.toFixed(3), backers: Object.keys(v.crowd.contributors).length, expiresAt: v.crowd.expiresAt, refunded: !!v.crowd.refunded } : undefined, mint: v.mint, symbol: v.symbol, name: v.name, dev: v.dev, stakeSol: v.stakeSol, pct: v.pct, cut: v.cut, armed: v.armed, renounced: v.renounced, avgCost: v.avgCost, tokens: v.tokens, chest: v.chest, devPaid: v.devPaid, activity: v.activity.slice(0, 50), createdAt: v.createdAt, copyOf: v.copyOf, imported: !!v.imported, mode: v.mode || 'floor', ceiling: v.ceiling ?? R.MM_MAX_CAPTURE, score: v.score || { captured: 0, captures: 0, deskBought: 0, deskFills: 0, dipBought: 0, dips: 0, redeployed: 0, floor0: 0 }, floor: v.supply ? v.chest / v.supply : 0, live: liveReadout(v), holders: v.holders || null, feePaid: v.feePaid || 0, depositedTokens: v.depositedTokens || 0, funders: v.funders || {}, streamed: v.streamed || 0, redeemed: v.redeemed || 0, supply: v.supply || 1e9, deskBid: v.deskBid || 0, shared: !!v.shared, vaultBuySol: v.vaultBuySol ?? null, mm: { spent: v.mmSpent || 0, got: v.mmGot || 0, tok: v.mmTok || 0, cost: v.mmCost || 0, inv: v.invGot || 0, stopped: !!v.stoppedAt }, copies: Object.values(vaults).filter((c) => c.copyOf === v.mint && c.armed).map((c) => ({ mint: c.mint, symbol: c.symbol, pub: c.pub })) })
+/** one launch, start to now, from the vault's own counters (cumulative — not the last 200 activity lines): what went in, what the chest
+ *  sold into buys, the fees it got, what it bought back. The app adds what's left at today's price. `fitted`: books were scaled to the
+ *  wallet after outside trades, so a result for this chest alone can't be computed (the app shows the wallet total instead). */
+function report(v: Vault) {
+  const sc: any = v.score || {}
+  return { staked: +(fundedSol(v) || v.stakeSol || 0).toFixed(4), launchBuySol: +(v.launchSpend || 0).toFixed(4), launchTok: Math.round((v as any).launchTok || 0), soldSol: +(sc.captured || 0).toFixed(4), sales: sc.captures || 0,
+    dipSol: +(sc.dipBought || 0).toFixed(4), dips: sc.dips || 0, deskSol: +(sc.deskBought || 0).toFixed(4), taxSol: +(v.taxClaimed || 0).toFixed(4), devPaid: +(v.devPaid || 0).toFixed(4), fitted: !!(v as any).fittedAt, armedAt: v.armedAt || null }
+}
+const pub = (v: Vault) => ({ report: report(v), paused: foreignPaused(v) ? (v as any)._foreignUntil : 0, sniper: (v as any).sniper || null, fitted: !!(v as any).fittedAt, id: v.id, pub: v.pub, paper: !!v.paper, venue: v.venue || 'pump', taxClaimed: v.taxClaimed || 0, image: v.image, uri: v.uri, vampFlag: !!v.vampFlag, permTax: v.permTax || 0, crowd: v.crowd ? { goalSol: v.crowd.goalSol, raised: +v.crowd.raised.toFixed(3), backers: Object.keys(v.crowd.contributors).length, expiresAt: v.crowd.expiresAt, refunded: !!v.crowd.refunded } : undefined, mint: v.mint, symbol: v.symbol, name: v.name, dev: v.dev, stakeSol: v.stakeSol, pct: v.pct, cut: v.cut, armed: v.armed, renounced: v.renounced, avgCost: v.avgCost, tokens: v.tokens, chest: v.chest, devPaid: v.devPaid, activity: v.activity.slice(0, 50), createdAt: v.createdAt, copyOf: v.copyOf, imported: !!v.imported, mode: v.mode || 'floor', ceiling: v.ceiling ?? R.MM_MAX_CAPTURE, score: v.score || { captured: 0, captures: 0, deskBought: 0, deskFills: 0, dipBought: 0, dips: 0, redeployed: 0, floor0: 0 }, floor: v.supply ? v.chest / v.supply : 0, live: liveReadout(v), holders: v.holders || null, feePaid: v.feePaid || 0, depositedTokens: v.depositedTokens || 0, funders: v.funders || {}, streamed: v.streamed || 0, redeemed: v.redeemed || 0, supply: v.supply || 1e9, deskBid: v.deskBid || 0, shared: !!v.shared, vaultBuySol: v.vaultBuySol ?? null, mm: { spent: v.mmSpent || 0, got: v.mmGot || 0, tok: v.mmTok || 0, cost: v.mmCost || 0, inv: v.invGot || 0, stopped: !!v.stoppedAt }, copies: Object.values(vaults).filter((c) => c.copyOf === v.mint && c.armed).map((c) => ({ mint: c.mint, symbol: c.symbol, pub: c.pub })) })
 export const vaultPct = (buySol: number) => Math.min(50, L.blockZero(0, buySol).vaultPct) // real curve: what the block-zero buy takes of supply (20–50% is the launch range)
 /** SOL the block-zero buy needs for `pct` of supply (binary search on the curve) */
 export function solForPct(pct: number, devSol = 0) { let lo = 0, hi = 500; for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (L.blockZero(devSol, mid).vaultPct > pct) hi = mid; else lo = mid } return +hi.toFixed(4) }
@@ -277,6 +286,7 @@ async function armOnce(id: string, mint: string, symbol: string, name = '', auth
     bal = v.chest
   } else { bal = await balanceSol(v.pub); if (bal < (bundled ? (v.stakeSol - buy) * 0.8 : v.stakeSol * 0.95)) throw new Error(`vault not funded: ${bal.toFixed(3)} / ${v.stakeSol} SOL`); v.chest = bal }
   v.mint = mint; v.symbol = symbol; v.name = name; v.armed = true; v.armedAt = Date.now(); VM.watch(mint); try { const sup = await conn.getTokenSupply(new PublicKey(mint)); v.supply = +(sup.value.uiAmount || 1e9) } catch {} if (!v.shared) v.activity.unshift({ t: Date.now(), kind: 'stake', sol: bal, msg: 'dev stake received' }); EV.log('vault', `${symbol} armed · chest ${bal.toFixed(3)} SOL`, { mint, id })
+  try { AL.send(`🚀 <b>${AL.esc(symbol)}</b> is live on ${v.venue === 'pump' ? 'pump.fun' : 'the BANKER launchpad'} · chest ${bal.toFixed(3)} SOL\n<code>${mint}</code>\n${AL.links(mint, v.venue)}`) } catch {}   // an alert never gets in the way of an arm
   // seed: the block-zero buy (skipped when the vault already bought in the bundle, or when the launch is tax-funded: no buy, the bot accumulates)
   const seed = +Math.min(buy, bal - 0.05).toFixed(4)
   if (seed < 0.05) { v.activity.unshift({ t: Date.now(), kind: 'note', msg: `tax-funded: no block-zero buy, accumulating toward ${v.pct}% under VWAP` }); save(); return pub(v) }
@@ -584,6 +594,30 @@ async function depositOnce(v: Vault, from: string, sig: string) {
 }
 export function renounce(id: string, dev: string) { const v = vaults[id]; if (!v || v.dev !== dev) throw new Error('not yours'); v.cut = 0; v.renounced = true; v.activity.unshift({ t: Date.now(), kind: 'note', msg: 'dev renounced cut' }); save(); return pub(v) }
 /** A launch that never armed (bundle dropped, arm never signed, coin abandoned): the dev takes the stake back. Signed by the dev; only before arm; pays to the wallet that funded it. */
+/** What a withdrawal would do, before anyone signs: the same rules as refundOnce, read-only. `ok` false → `why` in plain words. The vault
+ *  wallet's split (held · booked to chests · in no chest) is shown to the owner's wallets only (TEST_RECLAIM_WALLETS) — SOL in no chest is
+ *  the owner's to move himself, the server never spends it. */
+export async function withdrawPreview(id: string) {
+  const v = vaults[id]; if (!v) throw new Error('no such vault')
+  const reclaim = process.env.TEST_RECLAIM === '1' && reclaimAllowed(v.dev)
+  const untouched = v.tokens <= 0 && !(v.score && (v.score.captures || v.score.dips || v.score.deskFills)) && !v.activity.some((a) => a.kind === 'buy' || a.kind === 'capture' || a.kind === 'redeem')
+  const staked = fundedSol(v) || v.stakeSol
+  const p = v.mint && v.tokens > 0 ? (await market(v.mint).catch(() => null))?.priceSol || 0 : 0
+  const tokensSol = +(v.tokens * p * 0.9).toFixed(4)   // sold in slices: ~10% under the spot price, a rough figure
+  const chestOut = +Math.max(0, (v.shared ? v.chest : await balanceSol(v.pub).catch(() => v.chest)) - 0.001).toFixed(6)
+  let why = ''
+  if (v.crowd) why = 'a community takeover refunds every backer by itself — nothing to withdraw by hand'
+  else if (v.armed && !untouched && !reclaim) why = 'this chest has traded, so it stays with the coin — that is what holds the floor for holders'
+  else if ((v as any)._payPending) why = 'the last payout is still confirming — check your wallet, then try again in a minute'
+  else if (lateBooks.some((x) => x.id === v.id) || lateCredits.some((x) => x.id === v.id)) why = 'a trade of this chest is still confirming — try again in a few minutes'
+  else if (vaultOps.get(v.id)) why = 'a withdrawal of this chest is already running'
+  const sells = reclaim && v.tokens > 0.5
+  const sol = +(reclaim ? chestOut + (sells ? tokensSol : 0) : Math.min(staked, chestOut)).toFixed(4)
+  if (!why && sol < 0.001) why = (v as any).fittedAt ? 'this chest is empty. Trades from outside the server moved SOL in the vault wallet, so the books were fitted to it — what this coin made is in the vault wallet, not booked to this chest' : 'this chest is empty — nothing to withdraw'
+  const out: any = { ok: !why, why, sol, chest: +v.chest.toFixed(4), tokens: v.tokens, tokensSol, sells, staked: +staked.toFixed(4), full: reclaim, to: v.dev }
+  if (reclaim && v.shared) { const a = await sharedAudit().catch(() => null); if (a) out.wallet = { address: a.wallet, held: a.balanceSol, booked: a.ledgersSol, free: +Math.max(0, a.unattributedSol).toFixed(4) } }
+  return out
+}
 export async function refund(id: string, auth?: { msg?: string; sig?: string }) {
   if (!vaults[id]) throw new Error('no such vault')
   return withVaultOp(id, 'withdrawing', async () => { try { return await refundOnce(id, auth) } finally { const v = vaults[id]; if (v) { (v as any).closing = false; save() } } })   // only the run that set 'closing' clears it
@@ -744,6 +778,7 @@ export async function onBuy(v: Vault, solIn: number, m: any, p: number, now: num
     const sig = await trade(v, 'sell', `${Math.max(0.01, +(sellFrac * 100).toFixed(2))}%`, false, p, { ...(hint || {}), tokens, sniper, floorSol })
     await sync(v, sig, tokens * p * 0.97); const got = v.chest - before; MM.bookSell(v, tokens, got)
     v.score.captured += got; v.score.captures++
+    try { if (got >= +(process.env.TELEGRAM_BIG_SOL || 0.5)) AL.send(`💰 <b>${AL.esc(v.symbol)}</b> chest sold ${got.toFixed(3)} SOL into a ${solIn.toFixed(2)} SOL buy${sniper ? ' (sniper tax)' : ''} · chest now ${v.chest.toFixed(3)} SOL`) } catch {}   // after a landed sale: an alert must never break its booking
     v.activity.unshift({ t: now, kind: 'capture', sol: got, tokens, price: p, sig, msg: sniper ? `sniper tax: sold ${got.toFixed(3)} SOL into a ${solIn.toFixed(2)} SOL buy (${Math.round(got / Math.max(solIn, 1e-9) * 100)}%)${(v as any)._lastFastMs ? ` · our sale confirmed ${((v as any)._lastFastMs / 1000).toFixed(1)} s after the decision` : ''}` : initials ? `sold into a ${solIn.toFixed(2)} SOL buy · launch buy ${((v.invGot || 0)).toFixed(2)} / ${(v.launchSpend || 0).toFixed(2)} SOL back` : `countered a ${solIn.toFixed(2)} SOL buy · ${Math.round(frac * 100)}% · stretch +${Math.round((p / R.vwap(v.samples) - 1) * 100)}%` }); EV.log('vault', `${v.symbol} capture ${got.toFixed(3)} SOL`, { mint: v.mint, sig })
     const profit = got - v.avgCost * tokens; const cut = v.cut > 0 ? Math.max(0, profit) * (v.cut / 100) : 0
     // during the sniper window the dev cut is held back (a payout is a confirmed transfer: seconds the next sniper sale would wait); paid with
@@ -766,12 +801,21 @@ export async function onBuy(v: Vault, solIn: number, m: any, p: number, now: num
  *  The books are refit to the wallet by fitLedgers(). */
 const FOREIGN_PAUSE_MS = +(process.env.FOREIGN_PAUSE_MS || 15 * 60_000)
 const BOOT_AT = Date.now()
+const FOREIGN_GRACE_MS = +(process.env.FOREIGN_GRACE_MS ?? 120_000)
+/** a swap the feed saw: from this vault's wallet but not signed by the keeper (after the boot grace) → the chest pauses. Returns true when it paused. */
+export function seeSwap(vv: Vault | string, sw: { trader?: string; sig?: string; side: string; sol: number }) {
+  const v = typeof vv === 'string' ? vaults[vv] : vv; if (!v) return false
+  if (sw.trader !== v.pub || !sw.sig || KEEP.isOwn(sw.sig) || Date.now() - BOOT_AT <= FOREIGN_GRACE_MS) return false
+  foreignTrade(v, sw as any); return true
+}
 function foreignTrade(v: Vault, sw: { sig: string; side: string; sol: number }) {
   const sv = v as any; const first = !(sv._foreignUntil > Date.now()); sv._foreignUntil = Date.now() + FOREIGN_PAUSE_MS; sv._foreignN = (sv._foreignN || 0) + 1; v.ledgerDirty = true
   EV.log('error', `${v.symbol} a ${sw.side} of ${sw.sol.toFixed(3)} SOL from the vault wallet that the server did not sign (${sw.sig.slice(0, 10)}…) — chest paused ${Math.round(FOREIGN_PAUSE_MS / 60000)} min; trade from another wallet`, { mint: v.mint, sig: sw.sig })
   if (first) v.activity.unshift({ t: Date.now(), kind: 'note', sig: sw.sig, msg: `paused: someone else traded from the vault wallet (${sw.side} ${sw.sol.toFixed(2)} SOL) — the chest won't trade this coin until 15 min after the last such trade` })
 }
 export const foreignPaused = (v: Vault) => ((v as any)._foreignUntil || 0) > Date.now()
+/** tests: the vault object itself */
+export const _get = (id: string) => vaults[id]
 const MIN_SALE_SOL = +(process.env.MM_MIN_SALE_SOL || 0.03)
 /** buys that arrived while the vault was trading (per-buy policies only): sold into as one, right after the lock frees */
 function drainPending(v: Vault) {
@@ -949,7 +993,7 @@ async function tickOne(v: Vault) {
         if (ev && ev.mint !== v.mint) return   // a tx that also trades another coin: its events are not this coin's buys (review, Oct 30)
         D.broadcast({ type: 'swap', mint: v.mint, symbol: v.symbol, ...plain }); tape(v.mint!, { t: sw.t, side: sw.side, sol: sw.sol, trader: sw.trader, sig: sw.sig }); (v as any)._lastSwapAt = Date.now()
         // (the keeper's memory of its own signatures starts empty at boot: a sale sent just before a restart can land just after it — not foreign)
-        if (sw.trader === v.pub && sw.sig && !KEEP.isOwn(sw.sig) && Date.now() - BOOT_AT > 120_000) foreignTrade(v, sw)
+        seeSwap(v, sw)
         if (sw.side !== 'buy' || sw.trader === v.pub) return
         // the pool-read backstop may have caught this very buy a moment earlier (the websocket lagged the tick): never sell into one buy twice
         const bs = (v as any)._bs; if (bs && Date.now() - bs.t < 15000 && Math.abs(sw.sol - bs.sol) <= Math.max(0.02, bs.sol * 0.2)) { (v as any)._bs = null; return }
@@ -1240,6 +1284,7 @@ async function buildLaunchOnce(b: { dev: string; name: string; symbol: string; u
 let claiming = false; let nextClaimAt = 0
 /** Every few minutes: claim the platform fee vault (all pools at once) into the platform wallet and credit each coin's chest by its share of
  *  observed taxed volume. Vamp routing on top: a flagged copy's share goes to the original, a declared copy's half. Runs from the tick loop. */
+const CLAIM_MIN_SOL = +(process.env.CLAIM_MIN_SOL || 0.01); let lowClaimWarnAt = 0
 export async function claimPlatformFees(force = false): Promise<number> {
   if (PAPER || claiming || !LL.PLATFORM_ID) return 0
   // a claim that timed out may still land: settle it first — when it lands, its SOL is credited with the weights from when it was sent
@@ -1250,6 +1295,9 @@ export async function claimPlatformFees(force = false): Promise<number> {
   try {
     const pending = await LL.platformVaultSol(); if (pending < 0.005) return 0
     const pkB58 = LL.platformKeypair().publicKey.toBase58()
+    // the claim's network fees (and the wrapped-SOL account it opens) are paid by the platform wallet — the vault wallet. Nearly empty, the
+    // claim can only fail (0x1, every 3 min): skip it with one warning every 6 h instead. Nothing is lost: the fees wait in the platform vault.
+    { const bal = await balanceSol(pkB58).catch(() => null); if (bal != null && bal < CLAIM_MIN_SOL) { if (Date.now() - lowClaimWarnAt > 6 * 3.6e6) { lowClaimWarnAt = Date.now(); EV.log('error', `platform fee claim skipped: the vault wallet holds ${bal.toFixed(4)} SOL and a claim needs ≥ ${CLAIM_MIN_SOL} for its network fees — ${pending.toFixed(4)} SOL of fees waits on the platform until it does (nothing lost)`, { bal, pending }) } return 0 } }
     const tx = await LL.buildClaimVault(); const raw = tx.serialize(); const sig = bs58.encode(tx.signatures[0])
     const ours = Object.values(vaults).filter((v) => v.armed && v.venue === 'launchlab' && !v.paper && !(v as any).closedAt)   // a withdrawn vault earns nothing more
     snap = { ids: ours.map((v) => v.id), w: taxWeights(ours) }

@@ -13,6 +13,7 @@ createServer((req, res) => { let p = join(DIST, req.url.split('?')[0]); if (!exi
 // ---- mock UNNAMED server (:4198) ----
 const vaultKp = Keypair.generate(); const mintKp = Keypair.generate(); const MINT = mintKp.publicKey.toBase58(); const MINT2 = Keypair.generate().publicKey.toBase58(); const MINT3 = Keypair.generate().publicKey.toBase58(); const MINT4 = Keypair.generate().publicKey.toBase58(); let alreadyLive = false; let creatorAddr = ''
 const calls = {}; const bh = '11111111111111111111111111111111'
+let healthVW = 'BANKYubgHd48UQt2VFtEytyE8QyeBHhiuptC3tHmfVPH', previewOk = true, reportDev = ''
 const v0 = (payer, lamports = 1) => new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: bh, instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: payer, lamports })] }).compileToV0Message())
 const b64 = (tx) => Buffer.from(tx.serialize()).toString('base64')
 const vaultPub = { id: 'v1', pub: vaultKp.publicKey.toBase58(), venue: 'launchlab', mint: MINT, symbol: 'OURS', name: 'Ours', dev: '', stakeSol: 1, pct: 1.66, cut: 1.66, armed: false, renounced: false, chest: 0.5, tokens: 0, avgCost: 0, devPaid: 0, activity: [], createdAt: Date.now(), mode: 'mm', ceiling: 0.3, score: { captured: 0, captures: 0, deskBought: 0, deskFills: 0, dipBought: 0, dips: 0, redeployed: 0, floor0: 0 }, floor: 0, live: null, holders: null, feePaid: 0, depositedTokens: 0, funders: {}, streamed: 0, redeemed: 0, supply: 1e9, deskBid: 0, copies: [], taxClaimed: 0 }
@@ -21,7 +22,10 @@ createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x'); const p = u.pathname; let body = ''; for await (const c of req) body += c; const b = body ? JSON.parse(body) : {}
   ;(calls[p] ||= []).push(b); const json = (o) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(o)) }
   if (p.startsWith('/vault/mint/') && p.endsWith(MINT4)) return json(calls['/vault/attach'] ? { ...vaultPub, id: 'v4', mint: MINT4, armed: true, chest: 0 } : null)
-  if (p === '/health') return json({ ok: true, vaults: 0, desk: { openBids: 0 }, beta: { keeper: {} } })
+  if (p.startsWith('/dev/')) return json([{ ...vaultPub, id: 'v9', mint: MINT, symbol: 'OURS', dev: p.slice(5), armed: false, chest: 0.5, createdAt: Date.now() }])
+  if (p === '/vault/withdraw-preview') return json(previewOk ? { ok: true, why: '', sol: 0.499, chest: 0.5, tokens: 0, tokensSol: 0, sells: false, staked: 0.5, full: true, to: 'DEVxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', wallet: { address: 'BANKYubgHd48UQt2VFtEytyE8QyeBHhiuptC3tHmfVPH', held: 10.55, booked: 0.13, free: 10.42 } } : { ok: false, why: 'this chest has traded, so it stays with the coin — that is what holds the floor for holders', sol: 0, chest: 0.5, tokens: 0, tokensSol: 0, sells: false, staked: 0.5, full: false, to: 'DEVxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' })
+  if (p === '/vault/refund') return json({ sig: '5'.repeat(88), sol: 0.499 })
+  if (p === '/health') return json({ ok: true, vaultWallet: healthVW, vaults: 0, desk: { openBids: 0 }, beta: { keeper: {} } })
   if (p === '/ll/platform') return json({ venue: 'launchlab', permTaxBps: 0, platformId: 'PLAT', admin: 'ADMIN', feeWallet: 'FEE', taxBps: 200, creatorFeeBps: 50, chain: { id: 'PLAT', exists: true, feeRate: 2, creatorFeeRate: 0.5 } })
   if (p === '/ipfs') return json({ uri: 'https://ipfs.io/ipfs/test' })
   if (p === '/vault/create') return json({ ...vaultPub, dev: b.dev, venue: b.venue })
@@ -38,7 +42,7 @@ createServer(async (req, res) => {
   if (p === '/bundle') return json({ bundleId: 'bundle-1' })
   if (p === '/vault/arm') return json({ ...vaultPub, armed: true, tokens: 16.5e6, chest: 0.5 })
   if (p === '/vaults') return json(calls['/vault/arm'] ? [{ ...vaultPub, armed: true, tokens: 16.5e6, chest: 0.5 }] : [])
-  if (p.startsWith('/vault/mint/')) return json(calls['/vault/arm'] ? { ...vaultPub, armed: true, tokens: 16.5e6, chest: 0.5, vaultBuySol: 7.29, sniper: { buys: 14, buySol: 9.3, wallets: 11, sells: 2, sellSol: 0.8, blockZeroSol: 3.2, soldInto: 2.1, at: Date.now() }, mm: { spent: 0, got: 3.1, tok: 0, cost: 0, inv: 3.1, stopped: false }, activity: [{ t: Date.now() - 20000, kind: 'capture', sol: 0.62, msg: 'sold into a 2.10 SOL buy · launch buy 3.10 / 7.29 SOL back' }, { t: Date.now() - 50000, kind: 'tax', sol: 0.041, msg: 'tax → chest' }, { t: Date.now() - 70000, kind: 'capture', sol: 0.35, msg: 'sold into a 1.40 SOL buy · launch buy 2.48 / 7.29 SOL back' }] } : null)
+  if (p.startsWith('/vault/mint/')) return json(calls['/vault/arm'] ? { ...vaultPub, ...(reportDev ? { dev: reportDev, live: { ...vaultPub.live, price: 4e-8 }, report: { staked: 7.79, launchBuySol: 7.29, launchTok: 16.5e6, soldSol: 3.1, sales: 9, dipSol: 0, dips: 0, deskSol: 0, taxSol: 0.041, devPaid: 0, fitted: false, armedAt: Date.now() - 600000 } } : {}), armed: true, tokens: 16.5e6, chest: 0.5, vaultBuySol: 7.29, sniper: { buys: 14, buySol: 9.3, wallets: 11, sells: 2, sellSol: 0.8, blockZeroSol: 3.2, soldInto: 2.1, at: Date.now() }, mm: { spent: 0, got: 3.1, tok: 0, cost: 0, inv: 3.1, stopped: false }, activity: [{ t: Date.now() - 20000, kind: 'capture', sol: 0.62, msg: 'sold into a 2.10 SOL buy · launch buy 3.10 / 7.29 SOL back' }, { t: Date.now() - 50000, kind: 'tax', sol: 0.041, msg: 'tax → chest' }, { t: Date.now() - 70000, kind: 'capture', sol: 0.35, msg: 'sold into a 1.40 SOL buy · launch buy 2.48 / 7.29 SOL back' }] } : null)
   if (p === '/vault/attach') return json({ ...vaultPub, id: 'v4', mint: b.mint, armed: true, chest: 0, dev: b.dev })
   if (p.startsWith('/ll/pool/') && p.endsWith(MINT4)) return json({ poolId: 'POOL4', status: 0, migrated: false, priceSol: 3.0e-8, liqSol: 31, soldPct: 0.4, platformId: 'PLAT', ours: true, platformFee: '0', creator: creatorAddr })
   if (p.startsWith('/ll/pool/')) return json(p.endsWith(MINT) ? { poolId: 'POOL', status: 0, migrated: false, priceSol: 3.0e-8, liqSol: 31, soldPct: 0.4, platformId: 'PLAT', ours: true, platformFee: '12000000' } : null)
@@ -94,7 +98,7 @@ chk('buy at launch: 20% priced off the real curve ≈ 7 SOL ' + JSON.stringify(n
 await pg.locator('.modal input[type=range]').nth(0).fill('50'); await pg.waitForTimeout(100)
 chk('slider to 50%: ≈ 27 SOL', /50% · 2[6-9]\.\d+ SOL/.test(await pg.locator('.modal .note').first().innerText()))
 await pg.locator('.modal input[type=range]').nth(0).fill('20'); await pg.waitForTimeout(100)
-const seenToasts = new Set(); const seenSteps = new Set(); await pg.locator('.modal .btn.pri', { hasText: 'Create coin' }).click()
+const seenToasts = new Set(); const seenSteps = new Set(); await pg.locator('.modal .btn.pri', { hasText: 'Launch on' }).click()
 for (let i = 0; i < 40; i++) { await pg.waitForTimeout(200); for (const t of await pg.locator('.toast').allInnerTexts().catch(() => [])) seenToasts.add(t); const on = await pg.locator('.lp-steps .on').allInnerTexts().catch(() => []); on.forEach((x) => seenSteps.add(x.trim())); if (on.length && !existsSync(join(SC, 'launch-progress.png'))) await pg.locator('.modal .box').screenshot({ path: join(SC, 'launch-progress.png') }).catch(() => {}) }
 chk('launch progress row shows the live step ' + JSON.stringify([...seenSteps]), seenSteps.has('Build'))
 chk('vault created on the launchlab venue with the explicit block-zero buy (20% ≈ 7 SOL) + 0.5 SOL chest', calls['/vault/create']?.[0]?.venue === 'launchlab' && calls['/vault/create'][0].dev === addr && calls['/vault/create'][0].vaultBuySol > 6.5 && calls['/vault/create'][0].targetPct === 20 && Math.abs(calls['/vault/create'][0].stakeSol - calls['/vault/create'][0].vaultBuySol - 0.5) < 0.01)
@@ -114,6 +118,11 @@ const toasts = [...seenToasts]; console.log('TOASTS', toasts.map((t) => t.replac
 chk('success toast says live on UNNAMED · vault in block zero', toasts.some((t) => t.includes('live on BANKER') && t.includes('vault in block zero')))
 chk('success toast shows the stake went with the same signature', toasts.some((t) => /same signature/.test(t)))
 chk('navigated to the coin page', pg.url().includes('#/coin/' + MINT))
+const ca = await pg.locator('.launched #ca-text').innerText().catch(() => '')
+chk('success screen: the full CA with a copy button + dexscreener / axiom / solscan', ca === MINT && (await pg.locator('.launched .btn', { hasText: 'Copy' }).count()) === 1 && (await pg.locator('.launched .ca-links a', { hasText: 'dexscreener' }).getAttribute('href').catch(() => '')) === 'https://dexscreener.com/solana/' + MINT && (await pg.locator('.launched .ca-links a', { hasText: 'axiom' }).getAttribute('href').catch(() => '')) === 'https://axiom.trade/meme/POOL' && (await pg.locator('.launched .ca-links a', { hasText: 'solscan' }).count()) === 1)
+chk('success screen: the chest selling into the first buyers, live', /Sold into buyers so far/.test(await pg.locator('.launched .note').innerText().catch(() => '')))
+await pg.locator('.launched').screenshot({ path: join(SC, 'launched.png') }).catch(() => {})
+await pg.locator('.launched .btn', { hasText: 'Done' }).click().catch(() => {}); await pg.waitForTimeout(200); chk('success screen closes with Done', (await pg.locator('.launched').count()) === 0)
 await pg.waitForTimeout(2500); console.log('COINPAGE', (await pg.locator('.main').innerText().catch(() => '')).replace(/\n/g, ' / ').slice(0, 400))
 chk('chest card: sniper report (first minute)', /14 buys from 11 wallets/.test(await pg.locator('.prog-snipe').innerText().catch(() => '')))
 chk('chest card: launch buy paid back + what the chest did', (await pg.locator('.prog-back').innerText().catch(() => '')).includes('3.10 / 7.29') && (await pg.locator('.prog-fi').count()) === 3)
@@ -129,7 +138,8 @@ alreadyLive = true; const armsBefore = (calls['/vault/arm'] || []).length
 await pg.goto('http://localhost:4197/#/'); await pg.waitForTimeout(800)
 await pg.locator('.top .btn', { hasText: 'Launch' }).click(); await pg.waitForTimeout(400)
 await pg.locator('.modal input:not([type=checkbox])').nth(0).fill('Ours'); await pg.locator('.modal input:not([type=checkbox])').nth(1).fill('OURS'); await pg.locator('.modal input[type=file]').setInputFiles(png); await pg.waitForTimeout(200)
-const seen2 = new Set(); await pg.locator('.modal .btn.pri', { hasText: 'Create coin' }).click(); for (let i = 0; i < 10; i++) { await pg.waitForTimeout(500); for (const t of await pg.locator('.toast').allInnerTexts().catch(() => [])) seen2.add(t) }
+const seen2 = new Set(); await pg.locator('.modal .btn.pri', { hasText: 'Launch on' }).click(); for (let i = 0; i < 10; i++) { await pg.waitForTimeout(500); for (const t of await pg.locator('.toast').allInnerTexts().catch(() => [])) seen2.add(t) }
+chk('already-live retry: no success screen for a coin that was already live', (await pg.locator('.launched').count()) === 0)
 chk('already-live retry: opens the live coin, no second launch', pg.url().includes('#/coin/' + MINT2) && [...seen2].some((t) => /already live/i.test(t)))
 chk('already-live retry: arms onto the live coin (no fundSig: the server finds the create tx)', (calls['/vault/arm'] || []).length === armsBefore + 1 && calls['/vault/arm'].at(-1).mint === MINT2 && !calls['/vault/arm'].at(-1).fundSig)
 // ---- pump.fun launch: server-built too (…BANK mint, stake inside the create, one signature) ----
@@ -138,12 +148,15 @@ await pg.goto('http://localhost:4197/#/'); await pg.waitForTimeout(800)
 await pg.locator('.top .btn', { hasText: 'Launch' }).click(); await pg.waitForTimeout(400)
 await pg.locator('.venue button').nth(1).click(); await pg.waitForTimeout(200)
 await pg.locator('.modal input:not([type=checkbox])').nth(0).fill('Pumpy'); await pg.locator('.modal input:not([type=checkbox])').nth(1).fill('PMPY'); await pg.locator('.modal input[type=file]').setInputFiles(png); await pg.waitForTimeout(200)
-const seen3 = new Set(); await pg.locator('.modal .btn.pri', { hasText: 'Create coin' }).click(); for (let i = 0; i < 12; i++) { await pg.waitForTimeout(500); for (const t of await pg.locator('.toast').allInnerTexts().catch(() => [])) seen3.add(t) }
+const seen3 = new Set(); await pg.locator('.modal .btn.pri', { hasText: 'Launch on' }).click(); for (let i = 0; i < 12; i++) { await pg.waitForTimeout(500); for (const t of await pg.locator('.toast').allInnerTexts().catch(() => [])) seen3.add(t) }
 const pb = calls['/pump/launch/build']?.[0]
 console.log('PUMP TOASTS', [...seen3].map((t) => t.replace(/\n/g, ' / ').slice(0, 100)).join(' || '))
 chk('pump: the server builds the launch (fundInBundle, vault, dev signature)', !!pb && pb.fundInBundle === true && pb.vaultId === 'v1' && pb.symbol === 'PMPY' && !!pb.auth)
 chk('pump: no stake transfer sent ahead, one bundle [create+stake, vault buy]', sent.length === sentBefore && (calls['/bundle'] || []).length === bundlesBefore + 1 && calls['/bundle'].at(-1).txs.length === 2)
 chk('pump: armed onto the new coin with the create signature as the stake proof', calls['/vault/arm'].at(-1).mint === MINT3 && !!calls['/vault/arm'].at(-1).fundSig)
+const pl = await pg.locator('.launched').innerText().catch(() => '')
+chk('pump success screen: venue pump.fun, pump.fun link, axiom on the bonding curve', /pump\.fun/.test(pl) && (await pg.locator('.launched .ca-links a', { hasText: 'pump.fun' }).getAttribute('href').catch(() => '')) === 'https://pump.fun/coin/' + MINT3 && /^https:\/\/axiom\.trade\/meme\/[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(await pg.locator('.launched .ca-links a', { hasText: 'axiom' }).getAttribute('href').catch(() => '')))
+await pg.locator('.launched .btn', { hasText: 'Done' }).click().catch(() => {}); await pg.waitForTimeout(200)
 chk('pump: success toast + coin page', [...seen3].some((t) => t.includes('live on pump') && t.includes('vault in block zero')) && pg.url().includes('#/coin/' + MINT3))
 // ---- a coin launched here without a chest: its creator switches the chest on from the coin page (free) ----
 creatorAddr = addr
@@ -152,6 +165,29 @@ await pg.locator('button', { hasText: /^Vault/ }).first().click().catch(() => {}
 const sw = pg.locator('button', { hasText: 'Switch on the chest' }); chk('creator sees "Switch on the chest · free" on their chest-less launchpad coin', (await sw.count()) === 1)
 await sw.first().click().catch(() => {}); await pg.waitForTimeout(1500)
 const at = calls['/vault/attach']?.[0]; chk('attach sent for this coin by its creator, with a dev signature', !!at && at.mint === MINT4 && at.dev === addr && !!at.auth?.msg?.startsWith('unnamed:attach:attach:' + MINT4))
+// ---- the creator's launch report on the coin page ----
+reportDev = addr; await pg.goto('http://localhost:4197/#/coin/' + MINT); await pg.waitForTimeout(2500)
+await pg.locator('button', { hasText: /^Vault/ }).first().click().catch(() => {}); await pg.waitForTimeout(1200)
+const lr = await pg.locator('.lr').innerText().catch(() => '')
+chk('launch report for the creator: put in, snipers, sold into buys, fees, holds, result ' + JSON.stringify(lr.slice(0, 120)), /Put in\s+7\.79/.test(lr) && /Sold into buys\s+\+3\.10/.test(lr) && /14 buys/.test(lr) && /Result so far/.test(lr))
+await pg.locator('.lr').screenshot({ path: join(SC, 'launch-report.png') }).catch(() => {}); reportDev = ''
+// ---- withdraw: what it will do, before anything is signed ----
+await pg.goto('http://localhost:4197/#/mine'); await pg.waitForTimeout(1500)
+await pg.locator('button', { hasText: 'Refund stake' }).first().click().catch(() => {}); await pg.waitForTimeout(600)
+await pg.locator('.modal').last().locator('.box').screenshot({ path: join(SC, 'withdraw-sheet.png') }).catch(() => {})
+const sh = await pg.locator('.modal[role], .modal').last().innerText().catch(() => '')
+chk('withdraw sheet: preview first (≈ amount, destination, the vault wallet split)', !!calls['/vault/withdraw-preview'] && /You get\s+≈ 0\.499/.test(sh) && /10\.42\d* SOL in no chest/.test(sh) && /until you press Refund/.test(sh) && !calls['/vault/refund'])
+await pg.locator('.modal .btn.pri', { hasText: 'Refund' }).click().catch(() => {}); await pg.waitForTimeout(1500)
+chk('withdraw sheet: the refund is sent only after confirming', (calls['/vault/refund'] || []).length === 1 && calls['/vault/refund'][0].id === 'v9')
+previewOk = false; await pg.goto('http://localhost:4197/#/mine'); await pg.waitForTimeout(1500)
+await pg.locator('button', { hasText: 'Refund stake' }).first().click().catch(() => {}); await pg.waitForTimeout(600)
+chk('withdraw sheet: a chest that can\'t pay out says why in plain words and the button is off', /stays with the coin/.test(await pg.locator('.modal').last().innerText().catch(() => '')) && await pg.locator('.modal .btn.pri', { hasText: 'Refund' }).isDisabled().catch(() => false))
+await pg.locator('.modal .btn', { hasText: 'Cancel' }).click().catch(() => {})
+// ---- the vault wallet as the paying wallet: refused in the form, before anything is signed ----
+healthVW = addr; await pg.goto('http://localhost:4197/#/'); await pg.waitForTimeout(800)
+await pg.locator('.top .btn', { hasText: 'Launch' }).click(); await pg.waitForTimeout(900)
+const guard = pg.locator('.modal .btn.pri', { hasText: 'Switch wallet first' })
+chk('launch from the vault wallet: warned + the launch button is off', (await guard.count()) === 1 && await guard.isDisabled() && /This is the vault wallet/.test(await pg.locator('.modal [role=alert]').innerText().catch(() => '')))
 chk('no page errors', errs.filter((e) => !e.startsWith('FAIL') && !/net::|WebSocket|ERR_|Failed to fetch|localStorage/.test(e)).length === 0)
 await pg.screenshot({ path: join(SC, 'launch-coinpage.png') })
 await b.close(); const fails = errs.filter((e) => e.startsWith('FAIL')); if (fails.length) { console.log('ERRORS:', fails.join('; ')); process.exit(1) } process.exit(0)

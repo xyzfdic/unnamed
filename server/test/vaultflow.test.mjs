@@ -3,7 +3,7 @@
 // LaunchLab is mocked (module mock); the shared Connection object is patched per method. Run with --experimental-test-module-mocks.
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { Keypair, PublicKey, VersionedTransaction, TransactionMessage, SystemProgram, SystemInstruction } from '@solana/web3.js'
+import { Keypair, PublicKey, VersionedTransaction, TransactionMessage, SystemProgram, SystemInstruction, Transaction } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -11,13 +11,14 @@ import { join } from 'node:path'
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'vaultflow-'))
 const SHARED = Keypair.generate(); process.env.VAULT_KEY = bs58.encode(SHARED.secretKey)
-process.env.PROFIT_ONLY = '1'; process.env.PROFIT_LAUNCH_BUY_SOL = '9'; process.env.TEST_MAX_CHEST_SOL = '10'; process.env.VAMPS = '0'
+process.env.FOREIGN_GRACE_MS = '0'; process.env.PROFIT_ONLY = '1'; process.env.PROFIT_LAUNCH_BUY_SOL = '9'; process.env.TEST_MAX_CHEST_SOL = '10'; process.env.VAMPS = '0'
 const dev = Keypair.generate(); process.env.TEST_RECLAIM_WALLETS = dev.publicKey.toBase58(); let mintKp = Keypair.generate(); let MINT = mintKp.publicKey.toBase58(); const BANKY = SHARED.publicKey.toBase58()
 const bh = '11111111111111111111111111111111'
 const DEVPK = dev.publicKey.toBase58()
 
 // ---- fake chain ----
 const parsed = new Map()          // sig → parsed tx (keys + pre/post lamports)
+let pendingFees = 0, claimBuilt = 0
 let poolLive = false, vaultTokens = 0, blockhashValid = false, tradeN = 0, reuseMint = null
 const createSigs = []             // signatures in the order they landed on the mint
 const land = (tx, deltas) => { const sig = bs58.encode(tx.signatures[0]); const keys = [...new Set([...tx.message.staticAccountKeys.map((k) => k.toBase58()), ...Object.keys(deltas)])]
@@ -27,7 +28,7 @@ const land = (tx, deltas) => { const sig = bs58.encode(tx.signatures[0]); const 
 
 mock.module('../src/launchlab.ts', { namedExports: {
   PLATFORM_ID: Keypair.generate().publicKey, TAX_BPS: 200, CURVE_CUSTOM: false,
-  status: () => ({ venue: 'launchlab' }), isOurs: () => true, platformKeypair: () => SHARED, platformVaultSol: async () => 0,
+  status: () => ({ venue: 'launchlab' }), isOurs: () => true, platformKeypair: () => SHARED, platformVaultSol: async () => pendingFees, buildClaimVault: async () => { claimBuilt++; throw new Error('claim built') },
   poolIdOf: (m) => new PublicKey(m),   // stand-in: the pool account is the mint here (getAccountInfo below answers for it)
   pool: async (m) => (poolLive && m === MINT ? { poolId: 'POOL', status: 0, creator: DEVPK, liqSol: 45, priceSol: 1e-7, realB: 0n } : null),
   quote: (_s, solIn) => ({ tokens: solIn * 27e6, after: { virtualA: 1073025605596382n, virtualB: 30000852951n, realA: 0n, realB: BigInt(Math.round((0.5 + solIn) * 0.977e9)) } }),
@@ -198,4 +199,61 @@ test('books never above the wallet: chests are scaled down to what the shared wa
     const b = await V.sharedAudit(); assert.ok(b.ledgersSol <= a.ledgersSol / 2 + 1e-6 && b.ledgersSol > a.ledgersSol / 2 - 0.02, `${b.ledgersSol} vs ${a.ledgersSol / 2}`)
     C.conn.getBalance = async () => Math.round(a.ledgersSol * 3 * 1e9); const r2 = await V.fitLedgers(true); assert.equal(r2.fitted, false, 'a wallet above the books never raises a chest')
   } finally { C.conn.getBalance = real }
+})
+
+// ---- SOL in no chest (the vault wallet's 10+ SOL the owner moves himself) is never paid out or spent by a chest ----
+const landLegacy = (raw) => { const t = Transaction.from(raw); const sig = bs58.encode(t.signature); const tr = t.instructions.find((ix) => ix.programId.equals(SystemProgram.programId)); const d = SystemInstruction.decodeTransfer(tr)
+  const from = d.fromPubkey.toBase58(), to = d.toPubkey.toBase58(), sol = Number(d.lamports) / 1e9; paid.push({ from, to, sol })
+  parsed.set(sig, { blockTime: Math.floor(Date.now() / 1000), meta: { err: null, innerInstructions: [], preBalances: [100e9, 100e9], postBalances: [100e9 - Math.round((sol + 0.000005) * 1e9), 100e9 + Math.round(sol * 1e9)] }, transaction: { message: { instructions: [], accountKeys: [from, to].map((k) => ({ pubkey: new PublicKey(k) })) } } }); return sig }
+const paid = []
+test('SOL in no chest is never paid out: the full withdrawal ("Close & withdraw all") pays the chest\'s own ledger, not the wallet', async () => {
+  const { v, b } = await launch()
+  const ct = VersionedTransaction.deserialize(Buffer.from(b.txs[0], 'base64')); ct.sign([dev]); const vt = VersionedTransaction.deserialize(Buffer.from(b.vaultTx, 'base64'))
+  createSigs.length = 0; const cs = land(ct, { [DEVPK]: -(STAKE + 0.52), [BANKY]: +STAKE }); land(vt, { [BANKY]: -(b.vaultSpend + 0.005) }); createSigs.push(cs)
+  poolLive = true; vaultTokens = 0
+  const a = await V.arm(v.id, MINT, 'BANK', 'Bank', { sessionWallet: DEVPK }, cs); const chest = a.chest; assert.ok(chest > 0.3 && chest < 0.6, 'chest ' + chest)
+  const audit0 = await V.sharedAudit(); const FREE = 10.42; const realBal = C.conn.getBalance, realSend = C.conn.sendRawTransaction
+  C.conn.getBalance = async () => Math.round((audit0.ledgersSol + FREE) * 1e9); C.conn.sendRawTransaction = async (raw) => landLegacy(raw)
+  process.env.TEST_RECLAIM = '1'
+  try {
+    const pv = await V.withdrawPreview(v.id)
+    assert.equal(pv.ok, true, pv.why); assert.ok(Math.abs(pv.sol - (chest - 0.001)) < 1e-6, `preview ${pv.sol} vs chest ${chest}`)
+    assert.ok(pv.wallet && Math.abs(pv.wallet.free - FREE) < 1e-3, 'the owner sees what sits in no chest: ' + JSON.stringify(pv.wallet))
+    const r = await V.refund(v.id, { sessionWallet: DEVPK })
+    assert.ok(r.sol <= chest && r.sol > chest - 0.002, `paid ${r.sol}, chest was ${chest}`)
+    assert.equal(paid.length, 1); assert.equal(paid[0].from, BANKY); assert.equal(paid[0].to, DEVPK); assert.ok(paid[0].sol <= chest, 'the transfer itself is ≤ the chest')
+    const after = V.list().find((x) => x.id === v.id); assert.ok(!after || after.chest < 0.001, 'chest emptied')
+    const pv2 = await V.withdrawPreview(v.id); assert.equal(pv2.ok, false); assert.match(pv2.why, /empty/)
+    await assert.rejects(V.refund(v.id, { sessionWallet: DEVPK }), /nothing to refund|never pays out/)
+    assert.equal(paid.length, 1, 'no second payout')
+  } finally { C.conn.getBalance = realBal; C.conn.sendRawTransaction = realSend; delete process.env.TEST_RECLAIM; poolLive = false; createSigs.length = 0 }
+})
+test('a chest of ~0 in a wallet holding 10 SOL cannot buy with it: the keeper refuses any spend past the chest', async () => {
+  const KEEP = await import('../src/keeper.ts'); const k = Keypair.generate()
+  const t = () => { const x = new Transaction().add(SystemProgram.transfer({ fromPubkey: k.publicKey, toPubkey: Keypair.generate().publicKey, lamports: 1 })); x.feePayer = k.publicKey; x.recentBlockhash = bh; return x }
+  assert.throws(() => KEEP.sign({ id: 'empty-' + Date.now(), chest: 0, sk: k }, t(), 'trade', 1), /per-tx cap/)
+  assert.throws(() => KEEP.sign({ id: 'empty2-' + Date.now(), chest: 0, sk: k }, t(), 'desk_fill', 0.05), /per-tx cap/)
+  assert.throws(() => KEEP.sign({ id: 'empty3-' + Date.now(), chest: 0.13, sk: k }, t(), 'launch', 5), /exceeds the funded stake/)
+})
+test('someone else trading from the vault wallet pauses that chest (no sales into buys); the server\'s own signed swaps never do', async () => {
+  const KEEP = await import('../src/keeper.ts')
+  const id = V.list().find((x) => x.armed)?.id; assert.ok(id, 'an armed vault from the tests above'); const raw = V._get(id)
+  const own = KEEP.sign({ id, chest: 1, sk: SHARED }, new Transaction({ feePayer: SHARED.publicKey, recentBlockhash: bh }).add(SystemProgram.transfer({ fromPubkey: SHARED.publicKey, toPubkey: Keypair.generate().publicKey, lamports: 1 })), 'trade', 0)
+  assert.equal(V.seeSwap(id, { trader: BANKY, sig: bs58.encode(own.signature), side: 'sell', sol: 0.5 }), false, 'own sale')
+  assert.equal(V.seeSwap(id, { trader: Keypair.generate().publicKey.toBase58(), sig: bs58.encode(Buffer.alloc(64, 7)), side: 'buy', sol: 2 }), false, 'a stranger buying is just a buy')
+  assert.equal(V.list().find((x) => x.id === id).paused, 0)
+  assert.equal(V.seeSwap(id, { trader: BANKY, sig: bs58.encode(Buffer.alloc(64, 9)), side: 'buy', sol: 3.2 }), true, 'a buy from the vault wallet the keeper never signed')
+  const p = V.list().find((x) => x.id === id); assert.ok(p.paused > Date.now() + 10 * 60_000, 'paused ~15 min'); assert.match(p.activity[0].msg, /paused: someone else traded/)
+  const n0 = tradeN; await V.onBuy(raw, 2, { priceSol: 1e-7, liqSol: 45, mcapUsd: 1e5 }, 1e-7, Date.now()); assert.equal(tradeN, n0, 'no sale built while paused')
+  raw._foreignUntil = 0
+})
+test('the platform fee claim is skipped (one warning, nothing sent) when the vault wallet cannot pay its network fees', async () => {
+  const EV = await import('../src/events.ts'); const t0 = Date.now() - 1; const real = C.conn.getBalance
+  pendingFees = 0.4; claimBuilt = 0; C.conn.getBalance = async () => 0.002e9
+  try {
+    assert.equal(await V.claimPlatformFees(true), 0); assert.equal(await V.claimPlatformFees(true), 0)
+    assert.equal(claimBuilt, 0, 'no claim tx built on an empty wallet')
+    const ev = EV.since(t0); assert.equal(ev.filter((e) => /claim skipped/.test(e.msg)).length, 1, 'one warning, not one per cycle'); assert.equal(ev.filter((e) => /^platform fee claim: /.test(e.msg)).length, 0)
+    C.conn.getBalance = async () => 1e9; assert.equal(await V.claimPlatformFees(true), 0); assert.equal(claimBuilt, 1, 'with SOL in the wallet the claim goes ahead')
+  } finally { C.conn.getBalance = real; pendingFees = 0 }
 })

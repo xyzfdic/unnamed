@@ -566,6 +566,27 @@ await step('pump fast path: our own direct sell for a real holder → simulate (
   const ev = PF.tradesFromLogs(r.value.logs).find((e) => e.mint === c.mint && !e.isBuy); const paid = ev ? ev.sol : NaN
   return `holder ${h.owner.toBase58().slice(0, 6)}… sells 10% · ${r.value.unitsConsumed} CU (whole tx) · we expected ${(Number(expect) / 1e9).toFixed(5)} SOL, pump's event says ${paid.toFixed(5)} gross · pool priority fee ${fee} µlamports/CU · tx ${tx.serialize().length} B`
 })
+// cashback coins (pump's newer flag): their sell needs the seller's volume accumulator as an extra account — a sell built without it fails on
+// chain. Find one among today's busiest curve coins and simulate our own direct sell for a real holder.
+await step('pump fast path: direct sell on a CASHBACK coin for a real holder → simulate (the extra volume-accumulator account)', async () => {
+  const PF = await import('../src/pumpfast.ts'); const { tokenBalance } = await import('../src/chain.ts')
+  let found: any = null; const seen = new Set<string>()
+  for (const q of ['sort=h24_volume_usd_desc&page=1', 'sort=h24_tx_count_desc&page=1', 'sort=h24_volume_usd_desc&page=2']) {
+    const d: any = await (await timeout(fetch(`${GT}/networks/solana/dexes/pump-fun/pools?${q}`), 10000)).json().catch(() => null)
+    for (const p of (d?.data || []).slice(0, 20)) { const m = p.relationships.base_token.data.id.replace('solana_', ''); if (seen.has(m)) continue; seen.add(m)
+      const f = await PF.coinFacts(conn, m, true).catch(() => null); if (f?.cashback) { found = f; break } await sleep(150) }
+    if (found || seen.size >= 45) break; await sleep(1000)
+  }
+  if (!found) return `skipped: no cashback coin among ${seen.size} busy curve coins`
+  const h = await holderOf(found.mint); if (!h) return `cashback coin ${found.mint.slice(0, 6)}… · no wallet holder found`
+  const [g, rs, fee] = await Promise.all([PF.pumpGlobal(conn), PF.reserves(conn, found.curve), PF.poolPriorityFee(conn, [new PublicKey(found.curve)])])
+  const bal = await tokenBalance(h.owner.toBase58(), found.mint); const amt = bal.raw / 10n; const expect = PF.sellOut(rs!.vSol, rs!.vTok, amt, 130)
+  const lb = await conn.getLatestBlockhash('confirmed')
+  const tx = PF.buildSellTx(h.owner, found, g, amt, (expect * 97n) / 100n, fee, 1_000_000, lb.blockhash, 200_000); PF.selfCheck(tx, h.owner)
+  const r = await conn.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true })
+  if (r.value.err) throw new Error('cashback sell simulate err ' + JSON.stringify(r.value.err) + ' · ' + (r.value.logs || []).slice(-3).join(' | '))
+  return `cashback coin ${found.mint.slice(0, 6)}… · holder sells 10% · ${r.value.unitsConsumed} CU · tx ${tx.serialize().length} B`
+})
 await step('tx guard: the RPC simulates with inner instructions (the guard refuses to sign without them)', async () => {
   const tx = await ppBuild(PAYER, 'buy', ctx.curveMint!, 0.01); GUARDX.buy = tx
   const r = await conn.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, innerInstructions: true })

@@ -202,6 +202,7 @@ export function CoinVault({ mint, v, isDev, onRenounce, solPrice, onMode, onAtta
   return <div className="panel" style={{ gap: 10 }}>
     <div className="card" style={{ padding: 14 }}>
       <div style={{ fontSize: 15, fontWeight: 600 }}>This coin has a chest{!traded && <span className="tag live" style={{ marginLeft: 8 }}>ON · waiting for trades</span>}</div>
+      {(v.paused || 0) > Date.now() && <div className="note" style={{ marginTop: 8, borderColor: 'var(--dn)' }}>Paused: someone traded this coin from the vault wallet outside the server, so the chest is sitting out until {new Date(v.paused!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (15 min after the last such trade). Trade from your own wallet, not the vault wallet.</div>}
       <div className="nm" style={{ marginTop: 4, fontSize: 12.5, lineHeight: 1.5 }}>A pile of SOL that belongs to everyone holding {v.symbol}. Every trade adds to it. It buys when the price dips, takes profit when it pumps, and nobody can withdraw it.</div>
       <div className="tiles" style={{ marginTop: 10, gridTemplateColumns: v.venue === 'launchlab' ? 'repeat(4,1fr)' : 'repeat(3,1fr)' }}>
         <div className="tile" title="you can always trade your coins in for your share of the chest"><div className="l">Floor price</div><div className="v num"><Live v={floorUsd}>{floorUsd ? px(floorUsd) : '—'}</Live></div><div className="s">what the chest pays per {v.symbol} if you cash out</div></div>
@@ -211,6 +212,7 @@ export function CoinVault({ mint, v, isDev, onRenounce, solPrice, onMode, onAtta
       </div>
       <div className="row" style={{ marginTop: 8 }}><span className="sp" /><button className="btn sm" onClick={() => setMore(!more)}>{more ? 'Less' : 'Details'}</button></div>
     </div>
+    {isDev && v.report && <LaunchReport v={v} symbol={v.symbol || ''} />}
     {more && <>
     {traded && <VaultScore v={v} solPrice={solPrice} />}
     <div className="tiles" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
@@ -296,7 +298,7 @@ export function CreatorCard({ v, solPrice }: { v: K.VaultPub; solPrice: number }
   </div>
 }
 export function MinePage({ owner, go, solPrice, onRenounce, onClaim, busy, onConnect, onLaunch, onArm, onRefund }: { onRefund?: (v: K.VaultPub) => void; onArm?: (v: K.VaultPub) => void; onConnect?: () => void; onLaunch?: () => void; owner: string; go: (p: string) => void; solPrice: number; onRenounce: (v: K.VaultPub) => void; onClaim: (mint: string, toVault?: K.VaultPub) => void; busy: string }) {
-  const [list, setList] = useState<K.VaultPub[] | null>(null); const [err, setErr] = useState('')
+  const [list, setList] = useState<K.VaultPub[] | null>(null); const [err, setErr] = useState(''); const [wd, setWd] = useState<K.VaultPub | null>(null)
   useEffect(() => { if (!owner) return; const f = () => K.devVaults(owner).then((l) => { setList(l); setErr('') }).catch((e) => setErr(String(e.message || e))); f(); const i = setInterval(f, 10000); return () => clearInterval(i) }, [owner])
   if (!owner) return <div className="empty" style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>Your launches, cuts and claims live here.<div className="row" style={{ gap: 8 }}><button className="btn pri big" onClick={onConnect}>Connect wallet</button><button className="btn big" onClick={onLaunch}>Launch a coin</button></div></div>
   const armed = list?.filter((v) => v.armed) || []
@@ -314,10 +316,72 @@ export function MinePage({ owner, go, solPrice, onRenounce, onClaim, busy, onCon
       {(!shown || !shown.length) && <tr><td colSpan={7} className="empty">{err ? 'Server unreachable: ' + err : 'No launches from this wallet yet. Hit Launch — set a stake and the vault is yours.'}</td></tr>}
       {shown?.map((v) => <tr key={v.id}><td className="tk" style={{ cursor: v.mint ? 'pointer' : 'default' }} onClick={() => v.mint && go('coin/' + v.mint)}>{v.symbol || '(unfunded)'} {v.copyOf && <span className="tag">COPY</span>} {!v.armed && <span className="tag pre">{v.mint ? (v.chest > 0.0001 ? 'NOT ARMED' : 'NOT LIVE') : 'AWAITING STAKE'}</span>}<div className="nm">{v.mint ? (v.chest > 0.0001 || v.armed ? short(v.mint, 4) : 'nothing was spent · if it did launch, the chest switches on by itself') : 'send ' + v.stakeSol + ' SOL to ' + short(v.pub, 4)}</div></td>
         <td className="r num">{S(v.chest)} SOL</td><td className="r num">{v.tokens.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td><td className="r num">{v.renounced ? '0% · renounced' : v.cut + '%'}</td><td className="r num gold">{S(v.devPaid, 4)}</td><td className="r num">{v.deskBid ? S(v.deskBid, 2) + ' SOL' : '—'}</td>
-        <td className="r"><div className="row" style={{ justifyContent: 'flex-end', gap: 6 }}>{v.mint && !v.armed && v.chest > 0.0001 && onArm && <button className="btn sm pri" disabled={!!busy} onClick={() => onArm(v)}>Arm vault</button>}{onRefund && v.armed && (window as any).__reclaim && (v.chest > 0.001 || v.tokens > 0) ? <button className="btn sm" style={{ background: '#e5484d', color: '#fff', borderColor: '#e5484d' }} disabled={!!busy} title="Sells every token the vault holds and sends the whole chest to your wallet" onClick={() => onRefund(v)}>Close &amp; withdraw all</button> : v.chest > 0.001 && onRefund && (!v.armed || (v.tokens <= 0 && !(v.score?.captures || v.score?.dips || v.score?.deskFills) && !(v.taxClaimed || 0))) && <button className="btn sm" disabled={!!busy} onClick={() => onRefund(v)}>Refund stake</button>}{v.mint && <button className="btn sm" disabled={!!busy} onClick={() => onClaim(v.mint!)}>Claim fees</button>}{v.mint && v.armed && <button className="btn sm pri" disabled={!!busy} onClick={() => onClaim(v.mint!, v)}>Claim → chest</button>}{v.armed && !v.renounced && <button className="btn sm" onClick={() => onRenounce(v)}>Renounce</button>}</div></td></tr>)}
+        <td className="r"><div className="row" style={{ justifyContent: 'flex-end', gap: 6 }}>{v.mint && !v.armed && v.chest > 0.0001 && onArm && <button className="btn sm pri" disabled={!!busy} onClick={() => onArm(v)}>Arm vault</button>}{onRefund && v.armed && (window as any).__reclaim && (v.chest > 0.001 || v.tokens > 0) ? <button className="btn sm" style={{ background: '#e5484d', color: '#fff', borderColor: '#e5484d' }} disabled={!!busy} title="Sells every token the vault holds and sends the whole chest to your wallet" onClick={() => setWd(v)}>Close &amp; withdraw all</button> : v.chest > 0.001 && onRefund && (!v.armed || (v.tokens <= 0 && !(v.score?.captures || v.score?.dips || v.score?.deskFills) && !(v.taxClaimed || 0))) && <button className="btn sm" disabled={!!busy} onClick={() => setWd(v)}>Refund stake</button>}{v.mint && <button className="btn sm" disabled={!!busy} onClick={() => onClaim(v.mint!)}>Claim fees</button>}{v.mint && v.armed && <button className="btn sm pri" disabled={!!busy} onClick={() => onClaim(v.mint!, v)}>Claim → chest</button>}{v.armed && !v.renounced && <button className="btn sm" onClick={() => onRenounce(v)}>Renounce</button>}</div></td></tr>)}
     </tbody></table></div>
     <div className="nm" style={{ marginTop: 10 }}>Cut = vaulted %, paid only from trims above holder cost. Renounce is permanent.</div>
+    {wd && onRefund && <WithdrawSheet v={wd} busy={busy} onClose={() => setWd(null)} onConfirm={() => { const x = wd; setWd(null); onRefund(x) }} />}
   </>
+}
+
+/** server errors from a withdrawal, in plain words with what to do next */
+export function plainRefundErr(m: string): string {
+  if (/never pays out its chest/.test(m)) return 'This chest has traded, so it stays with the coin — that is what holds the floor for holders.'
+  if (/still holds tokens/.test(m)) return 'The chest still holds coins and sells them only above what it paid. Try again once they are sold.'
+  if (/nothing to refund/.test(m)) return 'This chest is empty — nothing to withdraw.'
+  if (/close-out: sells keep missing/.test(m)) return 'Selling the chest\'s coins keeps missing the price (the market is moving fast). Nothing was paid — try again in a minute.'
+  if (/payout not confirmed yet/.test(m)) return 'Sent and still confirming. It can only be paid once — check your wallet in a minute before pressing again.'
+  if (/payout failed.*(0x1|insufficient)|insufficient lamports/i.test(m)) return 'The vault wallet could not pay the network fee. Leave a little SOL (≈0.05) in it and try again.'
+  if (/dev signature required|auth message|bad dev signature/.test(m)) return 'Your wallet has to sign a message once to prove the chest is yours. Try again and approve it.'
+  if (/coin is live — the chest is switching on/.test(m)) return 'Your coin just went live and the chest is switching on. Give it a minute, then withdraw.'
+  if (/in flight/.test(m)) return 'A launch with this chest can still land. Wait a minute for it to land or expire.'
+  return m
+}
+
+/** what a withdrawal will do, shown before anything is signed */
+export function WithdrawSheet({ v, busy, onClose, onConfirm }: { v: K.VaultPub; busy?: string; onClose: () => void; onConfirm: () => void }) {
+  const [pv, setPv] = useState<K.WithdrawPreview | null>(null); const [err, setErr] = useState('')
+  useEffect(() => { K.withdrawPreview(v.id).then(setPv).catch((e) => setErr(String(e?.message || e))) }, [v.id])
+  return <div className="modal" onClick={onClose}><div className="box" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Withdraw">
+    <div className="row"><h2>{v.armed ? `Close ${v.symbol || 'chest'} & withdraw` : `Refund ${v.symbol || 'the'} stake`}</h2></div>
+    {!pv && !err && <div className="nm">Checking what this chest holds…</div>}
+    {err && <div className="note">Could not check this chest: {plainRefundErr(err)}</div>}
+    {pv && pv.ok && <>
+      <div className="kv"><span>You get</span><b className="num up" style={{ fontSize: 20 }}>≈ {S(pv.sol, 4)} SOL</b></div>
+      <div className="kv"><span>To</span><b className="num">{short(pv.to, 6)}</b></div>
+      <div className="kv"><span>From the chest</span><b className="num">{S(Math.max(0, pv.chest - 0.001), 4)} SOL</b></div>
+      {pv.sells && <div className="kv"><span>Its coins, sold first</span><b className="num">{Math.round(pv.tokens).toLocaleString()} ≈ {S(pv.tokensSol, 3)} SOL</b></div>}
+      <div className="nm">{pv.sells ? 'The coins are sold back to SOL in small slices a few seconds apart, so the price can move a little — the final amount can differ. ' : ''}Nothing is sent until you press {v.armed ? 'Withdraw' : 'Refund'}.</div>
+    </>}
+    {pv && !pv.ok && <div className="note"><b>Can't withdraw this one.</b> {pv.why.charAt(0).toUpperCase() + pv.why.slice(1)}.</div>}
+    {pv?.wallet && <div className="note" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+      <b>Vault wallet {short(pv.wallet.address, 4)}</b> holds {S(pv.wallet.held, 3)} SOL: {S(pv.wallet.booked, 3)} booked to live chests, <b className="up">{S(pv.wallet.free, 3)} SOL in no chest</b>.
+      {pv.wallet.free > 0.01 && <> SOL in no chest is yours to move yourself — open the vault-wallet account in Phantom and send it to your main wallet. The server never spends it. Leave about 0.05 SOL plus what is booked, so fee claims can pay their network fees.</>}
+    </div>}
+    <div className="row"><button className="btn" onClick={onClose}>Cancel</button><span className="sp" /><button className="btn pri" disabled={!pv?.ok || !!busy} onClick={onConfirm}>{v.armed ? 'Withdraw' : 'Refund'}{pv?.ok ? ` ≈ ${S(pv.sol, 3)} SOL` : ''}</button></div>
+  </div></div>
+}
+
+/** One launch, start to now — for its creator: what went in, what the chest got back from the market, what it holds, and the result. */
+export function LaunchReport({ v, symbol }: { v: K.VaultPub; symbol: string }) {
+  const r = v.report; const [copied, setCopied] = useState(false); if (!r) return null
+  const price = v.live?.price || 0; const coinsSol = v.tokens * price; const res = v.chest + coinsSol - r.staked
+  const text = [`$${symbol} launch report`, v.sniper?.buys ? `snipers: ${v.sniper.buys} buys · ${S(v.sniper.buySol, 2)} SOL from ${v.sniper.wallets} wallets in the first minute` : '', `chest sold ${S(r.soldSol, 2)} SOL into buys (${r.sales} sales)`, r.taxSol > 0 ? `fees into the chest: ${S(r.taxSol, 3)} SOL` : '', 'banker.cash'].filter(Boolean).join('\n')
+  const copy = () => { try { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }, () => {}) } catch {} }
+  return <div className="card lr" style={{ padding: 14 }}>
+    <div className="row"><b style={{ fontSize: 15 }}>Launch report</b><span className="sp" /><span className="nm">{r.armedAt ? ago(r.armedAt) + ' ago' : ''}</span></div>
+    <div className="lr-grid">
+      <div><div className="l">Put in</div><div className="v num">{S(r.staked, 3)} SOL</div><div className="s">{r.launchBuySol > 0 ? `${S(r.launchBuySol, 3)} of it bought coins at launch` : 'no launch buy'}</div></div>
+      {v.sniper && v.sniper.buys > 0 && <div><div className="l">Snipers · first minute</div><div className="v num">{S(v.sniper.buySol, 2)} SOL</div><div className="s">{v.sniper.buys} buys · {v.sniper.wallets} wallets</div></div>}
+      <div><div className="l">Sold into buys</div><div className="v num up">+{S(r.soldSol, 3)} SOL</div><div className="s">{r.sales} sales{v.sniper ? ` · ${S(v.sniper.soldInto, 3)} into snipers` : ''}</div></div>
+      {r.taxSol > 0 && <div><div className="l">Fees in</div><div className="v num up">+{S(r.taxSol, 3)} SOL</div><div className="s">2% of trades</div></div>}
+      {r.dipSol > 0 && <div><div className="l">Dip buys</div><div className="v num">−{S(r.dipSol, 3)} SOL</div><div className="s">{r.dips} buys</div></div>}
+      <div><div className="l">Holds now</div><div className="v num">{S(v.chest, 3)} SOL</div><div className="s">+ {Math.round(v.tokens).toLocaleString()} coins ≈ {S(coinsSol, 3)} SOL at today's price</div></div>
+    </div>
+    {r.fitted ? <div className="nm" style={{ marginTop: 8 }}><b>Result: —</b> SOL moved in or out of the vault wallet outside the chest (trades not signed by the server), so this chest's books were fitted to the wallet and a result for this coin alone isn't reliable. The wallet total on My launches is the real number.</div>
+      : <div className="row" style={{ marginTop: 8 }}><span>Result so far</span><span className="sp" /><b className={'num ' + (res >= 0 ? 'up' : 'dn')} style={{ fontSize: 18 }}>{res >= 0 ? '+' : ''}{S(res, 3)} SOL</b></div>}
+    {!r.fitted && <div className="nm">holds now − put in · coins valued at today's price (selling all of them at once would get less)</div>}
+    <div className="row" style={{ marginTop: 8 }}><span className="sp" /><button className="btn sm" onClick={copy}>{copied ? 'Copied ✓' : 'Copy summary'}</button></div>
+  </div>
 }
 
 export function LeaderboardPage({ owner }: { owner: string }) {

@@ -16,6 +16,29 @@
 - Live: server on Render (`unnamed-server.onrender.com`, helius, gate on, 2 SOL chest cap, 1 SOL import tier), app at `app.banker.cash`, landing at `banker.cash`. One brand wallet `BANKY…` is every vault (top holder on every coin) with per-vault chest ledgers booked from tx deltas; launched mints end in `…BANK` from a pre-ground pool; launch metadata self-hosted. Drawdown stop on the mm leg. Paper vault runs on CI against live coins (`paper.yml`).
 - Tests: server 35/35, app 20/20, e2e launch 21 (+21 in shared-wallet mode) · gate 15 · desk 50 · app 22 · import 16 · mm 10; mainnet: platform config created, platform fee claim (1.16 SOL) landed, a holder sell simulates clean. See POSTMORTEM.md for the first live launch.
 
+## Handoff (2026-11-02 evening) — smoother launches, honest withdrawals, alerts
+- **Launch form**: "Where it launches" is a labelled choice (BANKER launchpad = Raydium LaunchLab, "NOT on pump.fun"), the last choice is
+  remembered, and the button names the venue ("Launch on pump.fun"). Paying from the vault wallet (BANKY…) is refused in the form
+  (red note, button off) — the server already refused it; now nobody gets as far as signing.
+- **Success screen** after a launch lands: full CA + Copy, pump.fun / dexscreener / axiom (bonding curve or LaunchLab pool) / solscan /
+  launch tx, Post on X, and the chest's sales into the first buyers, live for 4 min.
+- **Launch report** (creator, coin page → Vault): put in, snipers' first minute, sold into buys, fees in, dip buys, holds now, result.
+  Server side: `report` in every vault's pub, from cumulative counters (not the 200-line activity). Hidden result when books were fitted.
+- **Withdraw / refund**: a preview sheet before anything is signed (`GET /vault/withdraw-preview?id=`, read-only, same rules as
+  refundOnce): ≈ amount, destination, coins sold first; or why not, in plain words. Owner's wallets also see the vault wallet's split
+  (held · booked to chests · in no chest). Failures are translated (plainRefundErr).
+- **Fee claims on an empty vault wallet**: skipped with one warning per 6 h (balance < CLAIM_MIN_SOL, 0.01) instead of failing 0x1
+  every 3 min. Fees wait on the platform; nothing lost.
+- **Telegram alerts** (src/alert.ts): off until TELEGRAM_BOT_TOKEN is in the Render env. First chat to /start pairs (DATA_DIR/telegram.json),
+  others are told it's private; TELEGRAM_CHAT_ID overrides. Sends: launch live (CA + links), sniper report, sales ≥ 0.5 SOL
+  (TELEGRAM_BIG_SOL), foreign-trade pauses, books fitted, claim skipped, every error (deduped by shape 10 min, ≤ 20/h). /status: wallet
+  split + live chests. Never blocks a trade: send() only queues. /health shows `alerts: off | waiting for /start | paired`.
+- **Invariant tests added**: SOL in no chest is never paid out (full withdrawal pays the chest ledger only; 10.42 SOL stays); a chest of
+  ~0 can't buy with the wallet's SOL (keeper caps); a vault-wallet swap the keeper didn't sign pauses that chest, its own don't;
+  claim skipped on an empty wallet. Preflight: direct sell on a CASHBACK pump coin (volume-accumulator account) simulated live.
+- The vault wallet keeps BANKY (vanity = marketing). The SOL in no chest is the owner's to move from Phantom; the server never spends it.
+  Leave ~0.05 SOL + what's booked so claims can pay fees.
+
 ## Handoff (2026-10-30 night) — first live launches: what happened, what's fixed
 
 Three live launches from the BANKY wallet itself (#1 nUCi…BANK launchpad, pump oLMo…BANK, #3 6XnV…BANK launchpad). Real result read from

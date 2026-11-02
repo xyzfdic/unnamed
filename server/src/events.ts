@@ -5,9 +5,13 @@ export type Ev = { t: number; kind: string; msg: string; data?: any }
 const DIR = () => process.env.DATA_DIR || './data'
 const FILE = () => DIR() + '/events.jsonl'
 const buf: Ev[] = []; let seq = 0
+const subs: ((e: Ev) => void)[] = []
+/** called for every event as it is logged (Telegram alerts); a subscriber that throws is ignored */
+export const onLog = (f: (e: Ev) => void) => { subs.push(f) }
 try { if (existsSync(FILE())) { const lines = readFileSync(FILE(), 'utf8').split('\n').filter(Boolean).slice(-600); for (const l of lines) { try { buf.push(JSON.parse(l)) } catch {} } } } catch {}
 export function log(kind: string, msg: string, data?: any) {
   const e: Ev = { t: Date.now(), kind, msg: String(msg).slice(0, 300), data }; buf.push(e); if (buf.length > 1000) buf.splice(0, 200); seq++
+  for (const f of subs) { try { f(e) } catch {} }
   try { mkdirSync(DIR(), { recursive: true }); if (existsSync(FILE()) && statSync(FILE()).size > 5e6) return; appendFileSync(FILE(), JSON.stringify(e) + '\n') } catch {}
 }
 export const since = (t = 0) => buf.filter((e) => e.t > t)
