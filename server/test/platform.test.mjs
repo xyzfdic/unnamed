@@ -35,8 +35,8 @@ test('cached → our platform with no RPC call at all', async () => {
   LL._platformCache(true); const undo = stub(async () => { throw new Error('should not be called') })
   try { assert.ok((await LL.launchPlatform()).equals(LL.PLATFORM_ID)) } finally { undo(); LL._platformCache(false) }
 })
-test('the vault\'s block-zero buy names the platform the create used (vault.ts passes built.platformId)', async () => {
+test('the vault\'s block-zero buy names the platform and the creator the create used (vault.ts passes built.platformId, dev)', async () => {
   const { readFileSync } = await import('node:fs'); const src = readFileSync(new URL('../src/vault.ts', import.meta.url), 'utf8')
   const calls = src.match(/LL\.buildTrade\([^\n]*fromCreate: true[^\n]*/g) || []
-  assert.ok(calls.length >= 1); for (const c of calls) assert.match(c, /platformId: built\.platformId/)
+  assert.ok(calls.length >= 1); for (const c of calls) { assert.match(c, /platformId: built\.platformId/); assert.match(c, /creator: dev\b/, 'the creator-fee vault is derived from the coin\'s creator (the dev), not the vault wallet — Nov 3: every launch from a non-vault wallet was dropped') }
 })
