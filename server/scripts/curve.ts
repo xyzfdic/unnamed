@@ -1,19 +1,17 @@
-// read-only: waitlist breakdown — aggregates only (no wallets or handles printed: this output lands on a branch)
+// read-only: quality of today's waitlist spike — aggregates only (no wallets or handles printed)
+import { PublicKey } from '@solana/web3.js'
+const { conn } = await import('../src/chain.ts')
 const S = 'https://unnamed-server.onrender.com'; const K = process.env.ADMIN_KEY || ''
-const get = async (p: string) => { try { return await (await fetch(S + p, { signal: AbortSignal.timeout(30000) })).json() } catch (e: any) { return { err: String(e?.message || e) } } }
-const w: any = await get('/admin/waitlist?key=' + encodeURIComponent(K)); const rows: any[] = w?.rows || []
-console.log('WAITLIST here', w?.count, '· offsite', w?.offsite, '· total', w?.total, w?.err ? 'ERR ' + w.err : '')
-const day = (t: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(t)
-const byDay: Record<string, number> = {}; for (const r of rows) byDay[day(r.t)] = (byDay[day(r.t)] || 0) + 1
-console.log('BY DAY (Houston)', Object.entries(byDay).sort().map(([d, n]) => `${d}: ${n}`).join(' · '))
-const withX = rows.filter((r) => r.x).length; console.log('WITH X HANDLE', withX, 'of', rows.length)
-const ua = (s: string) => /iPhone|iPad/i.test(s) ? 'iphone' : /Android/i.test(s) ? 'android' : /Mobile/i.test(s) ? 'other mobile' : s ? 'desktop' : 'unknown'
-const dev: Record<string, number> = {}; for (const r of rows) dev[ua(r.ua || '')] = (dev[ua(r.ua || '')] || 0) + 1; console.log('DEVICES', JSON.stringify(dev))
-const inapp = rows.filter((r) => /Phantom|Solflare|Backpack|Twitter|TwitterAndroid|Instagram|FBAN|FBAV/i.test(r.ua || '')).length; console.log('FROM IN-APP BROWSERS (wallet / x / ig)', inapp)
-const first = rows.length ? Math.min(...rows.map((r) => r.t)) : 0, last = rows.length ? Math.max(...rows.map((r) => r.t)) : 0
-console.log('FIRST', first ? new Date(first).toISOString() : '-', 'LAST', last ? new Date(last).toISOString() : '-')
-const xs = rows.map((r) => String(r.x || '').toLowerCase()).filter(Boolean); console.log('DUPLICATE X HANDLES', xs.length - new Set(xs).size)
-const red: any = await get('/invite/redeemed?key=' + encodeURIComponent(K)); const redList: any[] = Array.isArray(red) ? red : (red?.rows || red?.redeemed || [])
-const redW = new Set(redList.map((x: any) => x.wallet || x.owner || x).filter((x: any) => typeof x === 'string'))
-const wl = new Set(rows.map((r) => r.wallet)); console.log('INVITES REDEEMED', redList.length, '· of them on the waitlist', [...redW].filter((x) => wl.has(x)).length, red?.err ? 'ERR ' + red.err : '', Array.isArray(red) ? '' : 'keys:' + Object.keys(red || {}).join(','))
-const rc: any = await get('/receipts'); const vs: any[] = await get('/vaults'); const devs = new Set((Array.isArray(vs) ? vs : []).map((v) => v.dev)); console.log('WAITLIST WALLETS THAT LAUNCHED A LIVE CHEST', [...devs].filter((d) => wl.has(d)).length, '· launches total', rc?.launches)
+const w: any = await (await fetch(S + '/admin/waitlist?key=' + encodeURIComponent(K), { signal: AbortSignal.timeout(30000) })).json(); const rows: any[] = w?.rows || []
+const hr = (t: number) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).format(t)
+const today = rows.filter((r) => r.t > Date.parse('2026-11-02T06:00:00Z')); const before = rows.filter((r) => r.t <= Date.parse('2026-11-02T06:00:00Z'))
+const byHr: Record<string, number> = {}; for (const r of today) byHr[hr(r.t)] = (byHr[hr(r.t)] || 0) + 1
+console.log('TODAY BY HOUR (Houston)', Object.entries(byHr).sort().map(([h, n]) => `${h.slice(-2)}h:${n}`).join(' '))
+const gaps = today.map((r) => r.t).sort((a, b) => a - b).map((t, i, a) => i ? t - a[i - 1] : 0).slice(1); gaps.sort((a, b) => a - b)
+console.log('GAP BETWEEN SIGNUPS today: median', gaps.length ? (gaps[gaps.length >> 1] / 1000).toFixed(1) : '-', 's · under 2 s:', gaps.filter((g) => g < 2000).length, 'of', gaps.length)
+const uaCount: Record<string, number> = {}; for (const r of today) uaCount[r.ua || ''] = (uaCount[r.ua || ''] || 0) + 1
+const top = Object.entries(uaCount).sort((a, b) => b[1] - a[1]); console.log('DISTINCT USER AGENTS today', top.length, '· top 3:', top.slice(0, 3).map(([u, n]) => `${n}× ${u.slice(0, 70)}`).join(' || '))
+const xs = today.map((r) => String(r.x || '')).filter(Boolean); console.log('X HANDLES today', xs.length, 'of', today.length, '· ending in 4+ digits', xs.filter((x) => /\d{4,}$/.test(x)).length, '· before today: handles', before.filter((r) => r.x).length, 'of', before.length)
+async function empties(list: any[]) { let empty = 0, n = 0, low = 0; for (let i = 0; i < list.length; i += 100) { const ks = list.slice(i, i + 100).map((r) => { try { return new PublicKey(r.wallet) } catch { return null } }).filter(Boolean) as PublicKey[]; const infos = await conn.getMultipleAccountsInfo(ks).catch(() => null); if (!infos) continue; for (const a of infos) { n++; if (!a) empty++; else if (a.lamports < 0.01e9) low++ } await new Promise((r) => setTimeout(r, 400)) } return { n, empty, low } }
+const et = await empties(today), eb = await empties(before)
+console.log('WALLETS today: checked', et.n, '· never used (no account)', et.empty, '· under 0.01 SOL', et.low, '|| before today: checked', eb.n, '· never used', eb.empty, '· under 0.01', eb.low)
