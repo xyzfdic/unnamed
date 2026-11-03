@@ -74,3 +74,29 @@ test('a chest that bought at launch does not buy its bag back toward the target 
   assert.equal(MM.accumulate(mk({ ...base, launchSpend: 5.1 }), mkt(1e-7, 200), 1e-7, 1e6, PO, 0.5), null, 'bought at launch: no rebuild')
   assert.ok(MM.accumulate(mk({ ...base, launchSpend: 5.1 }), mkt(1e-7, 200), 1e-7, 1e6, { ...PO, accumAfterLaunch: true }, 0.5) > 0, 'switch on: allowed')
 })
+
+// ---- inventory band: a launch-bought chest that sold most of its coins buys some back on pullbacks, and sells smaller slices ----
+test('buy-back: only under target, only ≥10% under what it sold at, never above VWAP, never in a crash, capped by size, chest and the hour\'s sales', async () => {
+  const MM = await import('../src/mm.ts'); const now = Date.now(); const P = { ...MM.P, invTargetPct: 8, rebuyDiscount: 0.10, rebuyMaxSol: 0.5, rebuyBudgetFrac: 0.35, maxLegSol: 0 }
+  const base = () => ({ mode: 'mm', launchSpend: 7.2, supply: 1e9, tokens: 48e6, chest: 10.7, avgCost: 1e-8, pct: 20, samples: [{ t: now - 60_000, p: 1.2e-7, v: 1 }, { t: now - 30_000, p: 1.0e-7, v: 1 }], sales: [{ t: now - 10 * 60_000, sol: 10, tok: 80e6 }], mmCost: 0, cooldownUntil: 0 })
+  const m = { priceSol: 1e-7, liqSol: 60, mcapUsd: 1e5 }
+  const sold = 10 / 80e6   // 1.25e-7 per coin
+  assert.equal(MM.rebuy(base(), m, sold * 0.95, now, -0.05, P), null, 'only 5% under the sale price: no')
+  const s = base(); const sp = MM.rebuy(s, m, sold * 0.85, now, -0.08, P); assert.ok(sp > 0 && sp <= 0.5 && sp <= s.chest * 0.05 + 1e-9, 'a capped buy 15% under: ' + sp)
+  assert.equal(MM.rebuy({ ...base(), tokens: 90e6 }, m, sold * 0.85, now, -0.08, P), null, 'at 9% of supply (over the 8% target): no')
+  assert.equal(MM.rebuy(base(), m, sold * 0.85, now, -0.25, P), null, 'a crash (−25%) is left to the dip tranches')
+  assert.equal(MM.rebuy({ ...base(), samples: [{ t: now - 30_000, p: 0.9e-7, v: 1 }] }, m, sold * 0.85, now, -0.08, P), null, 'above the recent average: no')
+  assert.equal(MM.rebuy({ ...base(), launchSpend: 0 }, m, sold * 0.85, now, -0.08, P), null, 'a fee-funded chest accumulates its own way')
+  assert.equal(MM.rebuy({ ...base(), sales: [] , activity: [] }, m, sold * 0.85, now, -0.08, P), null, 'no sales this hour: no buy-back')
+  const hr = { ...base(), rebuys: [{ t: now - 5 * 60_000, sol: 3.48 }] }; assert.equal(MM.rebuy(hr, m, sold * 0.85, now, -0.08, P), null, 'the hour\'s budget (35% of 10 SOL sold) is used up')
+  const t = base(); MM.onRebuy(t, 0.5, 4e6, now); assert.equal(MM.rebuy(t, m, sold * 0.85, now + 10_000, -0.08, P), null, 'every ≥45 s'); assert.ok(t.mmTok === 4e6 && t.mmCost === 0.5, 'booked as the mm leg (sold again only at a profit)')
+  const seeded = { ...base(), sales: undefined, activity: [{ t: now - 60_000, kind: 'capture', sol: 2, tokens: 16e6 }, { t: now - 2 * 3.6e6, kind: 'capture', sol: 5, tokens: 1e6 }] }
+  assert.ok(Math.abs(MM.salesHour(seeded, now).sol - 2) < 1e-9, 'sales from before the restart are read from the activity (last hour only)')
+})
+test('inventory skew: under target the slice sold into a buy shrinks with the holding (never under a quarter); at or over target unchanged', async () => {
+  const MM = await import('../src/mm.ts'); const P = { ...MM.P, invTargetPct: 8 }
+  assert.equal(MM.invSkew({ launchSpend: 7, supply: 1e9, tokens: 100e6 }, P), 1)
+  assert.ok(Math.abs(MM.invSkew({ launchSpend: 7, supply: 1e9, tokens: 40e6 }, P) - 0.5) < 1e-9)
+  assert.equal(MM.invSkew({ launchSpend: 7, supply: 1e9, tokens: 5e6 }, P), 0.25)
+  assert.equal(MM.invSkew({ launchSpend: 0, supply: 1e9, tokens: 5e6 }, P), 1, 'fee-funded chests untouched')
+})

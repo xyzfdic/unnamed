@@ -1089,6 +1089,15 @@ async function tickOne(v: Vault) {
         v.score.redeployed += spend
         v.activity.unshift({ t: now, kind: 'buy', sol: spend, tokens: got, price: p, sig, msg: `accumulating · ${MM.vaultedPct(v).toFixed(1)}% of ${v.pct}% target` })
       }
+      // buy-back: a launch-bought chest under its inventory target buys a slice back on a pullback below what it sold at (mm.ts rebuy)
+      else if (!NOBUY && (() => { const a = MM.rebuy(v, m, p, now, dd); if (a) (v as any)._rb = a; return !!a })()) {
+        const spend = (v as any)._rb as number; delete (v as any)._rb; (v as any)._lastSpend = spend; const sv = MM.salesHour(v, now).vwap
+        const before = v.tokens; const sig = await trade(v, 'buy', spend, true, p)
+        await sync(v, sig, -spend); const got = v.tokens - before; MM.onRebuy(v, spend, got, now)
+        v.score.redeployed += spend
+        v.activity.unshift({ t: now, kind: 'buy', sol: spend, tokens: got, price: p, sig, msg: `bought back ${(got / 1e6).toFixed(2)}M coins ${sv > 0 ? Math.round((1 - p / sv) * 100) + '% under what it sold at' : ''} · holds ${MM.vaultedPct(v).toFixed(1)}% (target ${MM.P.invTargetPct}%)` })
+        EV.log('vault', `${v.symbol} bought back ${spend} SOL of coins on a pullback (holds ${MM.vaultedPct(v).toFixed(1)}% of supply)`, { mint: v.mint, sig })
+      }
       // trim
       else if (v.mode !== 'mm' && v.tokens > 0 && p >= MM.sellFloor(v.avgCost) && R.mayTrim(p, v.avgCost, R.vwap(v.samples), v.ema5!, v.ema15!) && now - v.lastTrim > R.VAULT_TRIM_COOLDOWN_MS && trimAllowed(v, m, p, now) > 0) {
         const frac = trimAllowed(v, m, p, now) / v.tokens; const before = v.chest

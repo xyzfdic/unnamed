@@ -24,6 +24,16 @@ export const P = {
   // dump (live Oct 30: 0.2 + 0.15 + 0.2 SOL of accumulation on two coins already −40–60% from the high). Off unless MM_ACCUM_AFTER_LAUNCH=1;
   // the capped dip tranches still run. Tax-funded vaults (no launch buy) accumulate as before.
   accumAfterLaunch: process.env.MM_ACCUM_AFTER_LAUNCH === '1',
+  // inventory band for a chest that bought at launch: it sells into buys, so its coins run down. Under invTargetPct of supply it
+  // (1) sells smaller slices (skew ∝ how far under target, never below a quarter) and (2) buys back on pullbacks — only ≥ rebuyDiscount
+  // under the price it SOLD at in the last hour, never above the 30-min VWAP, never in a crash (≤ −20%: the tranches' job), ≤ rebuyMaxSol
+  // and ≤ 5% of the chest a buy, every ≥ 45 s, and in any hour ≤ rebuyBudgetFrac of the SOL its sales brought in that hour. 0 = off.
+  invTargetPct: +(process.env.MM_INV_TARGET_PCT ?? 8),
+  rebuyDiscount: +(process.env.MM_REBUY_DISCOUNT ?? 0.10),
+  rebuyMaxSol: +(process.env.MM_REBUY_MAX_SOL ?? 0.5),
+  rebuyChestFrac: 0.05,
+  rebuyEveryMs: 45_000,
+  rebuyBudgetFrac: +(process.env.MM_REBUY_BUDGET ?? 0.35),
   // initials (tests): until the launch buy is paid back, every buy that comes in (snipers) gets a slice of the vault sold into it at once —
   // initialsFrac of that buy's size, never more than what is left to recover, never under cost +1%. 0 = off.
   initialsFrac: +(process.env.MM_INITIALS_FRAC ?? 0),
@@ -98,8 +108,14 @@ export const vaultedPct = (s: State) => (s.supply ? (s.tokens / s.supply) * 100 
 /** P&L of the mm leg only (SOL spent on dip buys / desk fills / accumulation vs SOL got back from captures, plus the tokens it still holds at p). The block-zero seed is not part of it. */
 export const mmPnl = (s: State, p: number) => (s.mmGot || 0) - (s.mmSpent || 0) + Math.max(0, s.mmTok || 0) * p
 /** book a sell of `tokens` for `solGot`: bought tokens leave the leg first (their share of the proceeds is leg P&L), the rest is inventory proceeds. */
-export function bookSell(s: State, tokens: number, solGot: number): number {
+/** the chest's sales of the last hour (t, SOL in, coins out); a chest that sold before this was kept is seeded from its activity once */
+export function salesOf(s: State): { t: number; sol: number; tok: number }[] {
+  const sv = s as any; if (Array.isArray(sv.sales)) return sv.sales
+  const now = Date.now(); sv.sales = ((sv.activity || []) as any[]).filter((a) => a.kind === 'capture' && a.tokens > 0 && a.sol > 0 && now - a.t < 3.6e6).map((a) => ({ t: a.t, sol: a.sol, tok: a.tokens })).sort((a, b) => a.t - b.t); return sv.sales
+}
+export function bookSell(s: State, tokens: number, solGot: number, now = Date.now()): number {
   if (!(tokens > 0) || !(solGot > 0)) return 0
+  const sl = salesOf(s); sl.push({ t: now, sol: solGot, tok: tokens }); while (sl.length && now - sl[0].t > 3.6e6) sl.shift(); if (sl.length > 400) sl.splice(0, sl.length - 400)
   const held = Math.max(0, s.mmTok || 0); const fromLeg = Math.min(tokens, held); const share = fromLeg / tokens
   if (held > 0) s.mmCost = Math.max(0, (s.mmCost || 0) * (1 - fromLeg / held))
   s.mmTok = held - fromLeg; s.mmGot = (s.mmGot || 0) + solGot * share; s.invGot = (s.invGot || 0) + solGot * (1 - share)
@@ -205,6 +221,31 @@ export const sniperOn = (s: State, now: number, p_: Params = P) => p_.sniperFrac
 /** either per-buy selling mode: sells go out at once, one at a time */
 export const perBuyOn = (s: State, p_: Params = P, now = Date.now()) => sniperOn(s, now, p_) || initialsOn(s, p_) || takeOn(s, p_)
 /** Capture decision when a buy of `solIn` lands: tokens to sell into it. 0 = let it run. */
+/** a launch-bought chest under its inventory target sells smaller slices: ×(holding / target), never under ×0.25 */
+export const invSkew = (s: State, p_: Params = P) => { if (!(p_.invTargetPct > 0) || !((s.launchSpend || 0) > 0)) return 1; const v = vaultedPct(s); return v >= p_.invTargetPct ? 1 : Math.max(0.25, v / p_.invTargetPct) }
+/** SOL-weighted price of the chest's sales in the last hour, and the SOL they brought in */
+export function salesHour(s: State, now: number) { let sol = 0, tok = 0; for (const x of salesOf(s)) if (now - x.t < 3.6e6) { sol += x.sol; tok += x.tok } return { sol, tok, vwap: tok > 0 ? sol / tok : 0 } }
+/** Buy back toward the inventory target on a pullback (see invTargetPct). null = nothing this tick. */
+export function rebuy(s: State, m: Market, p: number, now: number, dd: number, p_: Params = P): number | null {
+  if (!(p_.invTargetPct > 0) || s.mode !== 'mm' || !((s.launchSpend || 0) > 0) || !(p > 0) || !s.supply) return null
+  if (now - ((s as any).lastRebuy || 0) < p_.rebuyEveryMs || now < (s.cooldownUntil || 0) || stopped(s, p, now, p_)) return null
+  if (dd <= -0.20) return null
+  const inv = vaultedPct(s); if (inv >= p_.invTargetPct) return null
+  const h = salesHour(s, now); if (h.sol < 0.1 || !(h.vwap > 0) || p > h.vwap * (1 - p_.rebuyDiscount)) return null
+  const ref = R.vwap(s.samples); if (ref > 0 && p > ref) return null
+  const spentHr = (((s as any).rebuys || []) as { t: number; sol: number }[]).filter((x) => now - x.t < 3.6e6).reduce((a, x) => a + x.sol, 0)
+  const budget = h.sol * p_.rebuyBudgetFrac - spentHr
+  const need = ((p_.invTargetPct - inv) / 100) * s.supply * p
+  const impactRoom = m.liqSol > 0 ? m.liqSol * p_.poolImpactMax : Infinity
+  const spend = Math.floor(Math.min(p_.rebuyMaxSol, s.chest * p_.rebuyChestFrac, budget, need * 1.02, impactRoom, s.chest - 0.05, legRoom(s, p_), p_.maxBuySol) * 1e4) / 1e4
+  return spend >= p_.minBuySol ? spend : null
+}
+/** book a buy-back that landed: it is a round trip of the mm leg (sold again at legTakeProfit over its cost) */
+export function onRebuy(s: State, spend: number, got: number, now: number) {
+  s.avgCost = (s.avgCost * (s.tokens - got) + spend) / Math.max(s.tokens, 1e-9); s.lastBuy = now; (s as any).lastRebuy = now
+  const rb = ((s as any).rebuys ||= []) as { t: number; sol: number }[]; rb.push({ t: now, sol: spend }); while (rb.length && now - rb[0].t > 3.6e6) rb.shift()
+  s.mmSpent = (s.mmSpent || 0) + spend; s.mmTok = (s.mmTok || 0) + got; s.mmCost = (s.mmCost || 0) + spend
+}
 export function capture(s: State, m: Market, p: number, solIn: number, now: number, p_: Params = P, rnd = Math.random(), rnd2 = Math.random()): number {
   // sniper tax first: a flat share of every buy in the window, sold straight back into it
   if (p_.captureOn && s.mode === 'mm' && s.tokens > 0 && sniperOn(s, now, p_)) {
@@ -223,7 +264,7 @@ export function capture(s: State, m: Market, p: number, solIn: number, now: numb
   if (p_.captureOn && s.mode === 'mm' && s.tokens > 0 && takeOn(s, p_)) {
     if (solIn < p_.initialsMinBuy || (s.avgCost > 0 && p < s.avgCost * (1 + p_.profitMargin))) return 0
     const impact = m.liqSol > 0 ? (m.liqSol * p_.poolImpactMax) / p : Infinity
-    const t = Math.min((solIn * sellShare(solIn, false, p_)) / p, impact, s.tokens * p_.takeMaxTokFrac, s.tokens)
+    const t = Math.min((solIn * sellShare(solIn, false, p_) * invSkew(s, p_)) / p, impact, s.tokens * p_.takeMaxTokFrac, s.tokens)
     return t * p >= 0.005 ? t : 0
   }
   if (!p_.captureOn || s.mode !== 'mm' || solIn < R.MM_MIN_BUY_SOL || s.tokens <= 0) return 0
@@ -239,7 +280,7 @@ export function capture(s: State, m: Market, p: number, solIn: number, now: numb
   if (p < sellFloor(s.avgCost, p_)) return legSell   // profit-only: inventory is never trimmed under what it cost
   const frac = R.captureFracV2(p, R.vwap(s.samples), s.avgCost, m.mcapUsd, R.sigma(s.samples), vaultedPct(s), s.pct || 5, s.ceiling ?? R.MM_MAX_CAPTURE, rnd2); if (frac <= 0) return legSell
   const vol1hSol = (m.vol1h || 0) / 150
-  let tokens = (solIn * frac) / p
+  let tokens = (solIn * frac * invSkew(s, p_)) / p
   tokens = Math.min(tokens, (vol1hSol * R.MM_VOL_CAP) / p, s.tokens * p_.captureDayCap - s.trimmedToday, s.tokens * 0.05, impactTok)
   if (tokens * p < 0.05) return legSell
   return Math.max(tokens, legSell)

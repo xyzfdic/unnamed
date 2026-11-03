@@ -46,7 +46,7 @@ async function launchBundle(txs: string[]) {
   const sim = await simP
   EV.log('vault', `launch bundle ${bundleId.slice(0, 10)}… sent (${txs.length} txs)${sim ? ` · create would fail: ${sim}` : ''}`, { bundleId, sim })
   // what Jito made of it, for the log (and the Telegram error alerts): checked at 10 s and 40 s
-  for (const ms of [10_000, 40_000]) setTimeout(async () => { const st = await C.bundleStatus(bundleId).catch(() => null); if (st && !/^pending$/i.test(st.status)) EV.log(/landed/i.test(st.status) ? 'vault' : 'error', `launch bundle ${bundleId.slice(0, 10)}… ${st.status}${st.slot ? ' in slot ' + st.slot : ''} (${Math.round((Date.now() - t0) / 1000)} s after sending)${sim ? ' · create sim: ' + sim : ''}`, { bundleId, st }) }, ms)
+  for (const ms of [10_000, 40_000]) setTimeout(async () => { const st = await C.bundleStatus(bundleId).catch(() => null); if (st && !/^pending$/i.test(st.status)) EV.log(/failed/i.test(st.status) ? 'error' : 'vault', `launch bundle ${bundleId.slice(0, 10)}… ${/invalid/i.test(st.status) ? 'not known to the region that took it (another region may have landed it)' : st.status}${st.slot ? ' in slot ' + st.slot : ''} (${Math.round((Date.now() - t0) / 1000)} s after sending)${sim ? ' · create sim: ' + sim : ''}`, { bundleId, st }) }, ms)
   return { bundleId, sim: sim || undefined }
 }
 /** coarse, non-identifying context for a waitlist signup: the browser's language/region tag (Accept-Language, e.g. en-US, pt-BR), the
