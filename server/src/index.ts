@@ -32,6 +32,23 @@ setInterval(() => { const now = Date.now(); for (const [k, b] of buckets) if (no
 const isPk = (x: any) => typeof x === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(x)
 
 const wlSet = new Set<string>(); const wlIp = new Map<string, number[]>()
+/** A launch bundle: sent at once (no added latency); the create is simulated alongside, so a bundle that can never land (the wallet is
+ *  short of SOL, the blockhash is gone, the program refuses it) comes back with the reason in seconds instead of a 100 s wait. Every
+ *  launch bundle and what Jito made of it (Landed / Failed / Invalid) goes to the event log — the trail a stuck launch was missing. */
+async function launchBundle(txs: string[]) {
+  const raw0 = Buffer.from(String(txs?.[0] || ''), 'base64')
+  const simP = (async () => { try { const { VersionedTransaction } = await import('@solana/web3.js'); const t = VersionedTransaction.deserialize(raw0)
+    const r = await Promise.race([C.conn.simulateTransaction(t, { sigVerify: false, replaceRecentBlockhash: false }), new Promise<null>((ok) => setTimeout(() => ok(null), 4000))]) as any
+    if (!r?.value?.err) return null; const logs: string[] = r.value.logs || []; const e = JSON.stringify(r.value.err)
+    return /BlockhashNotFound/.test(e) ? 'expired' : /insufficient lamports|insufficient funds|InsufficientFunds/i.test(e + ' ' + logs.join(' ')) ? 'insufficient' : e.slice(0, 120) + ' · ' + (logs.slice(-2).join(' | ')).slice(0, 160) } catch { return null } })()
+  const t0 = Date.now(); let bundleId = ''
+  try { bundleId = await V.sendBundle(txs) } catch (e: any) { EV.log('error', `launch bundle refused: ${String(e?.message || e).slice(0, 160)}`); const sim = await simP; if (sim === 'insufficient') throw new Error('the wallet signing the launch is short of SOL for it — nothing was spent'); throw e }
+  const sim = await simP
+  EV.log('vault', `launch bundle ${bundleId.slice(0, 10)}… sent (${txs.length} txs)${sim ? ` · create would fail: ${sim}` : ''}`, { bundleId, sim })
+  // what Jito made of it, for the log (and the Telegram error alerts): checked at 10 s and 40 s
+  for (const ms of [10_000, 40_000]) setTimeout(async () => { const st = await C.bundleStatus(bundleId).catch(() => null); if (st && !/^pending$/i.test(st.status)) EV.log(/landed/i.test(st.status) ? 'vault' : 'error', `launch bundle ${bundleId.slice(0, 10)}… ${st.status}${st.slot ? ' in slot ' + st.slot : ''} (${Math.round((Date.now() - t0) / 1000)} s after sending)${sim ? ' · create sim: ' + sim : ''}`, { bundleId, st }) }, ms)
+  return { bundleId, sim: sim || undefined }
+}
 /** coarse, non-identifying context for a waitlist signup: the browser's language/region tag (Accept-Language, e.g. en-US, pt-BR), the
  *  site it came from (Origin/Referer host), and — when the signup page sends them — its time zone, utm source/campaign and referrer.
  *  No IP is stored. */
@@ -136,7 +153,7 @@ const server = createServer(async (req, res) => {
     if (p === '/vault/bundle-sign' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await V.signBundleTx(b.id, b.mint, b.tx, +b.maxSol, b.createTx, { ...(b.auth || {}), sessionWallet })) }
     if (p.startsWith('/market/') && req.method === 'GET') { const { market } = await import('./market.ts'); const m: any = await market(p.slice(8).replace(/[^1-9A-HJ-NP-Za-km-z]/g, '')).catch(() => null); return json(res, 200, m ? { priceSol: m.priceSol, mcapUsd: m.mcapUsd, liqSol: m.liqSol, onCurve: !!m.onCurve, venue: m.venue || (m.dexId === 'pumpfun' ? 'pump' : m.dexId), dexId: m.dexId, symbol: m.symbol || '', pair: m.pair || '', vol1h: m.vol1h || 0 } : null) }
     if (p.startsWith('/bundle/status/') && req.method === 'GET') { return json(res, 200, (await C.bundleStatus(p.slice(15)).catch(() => null)) || { status: 'unknown' }) }
-    if (p === '/bundle' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, { bundleId: await V.sendBundle(b.txs) }) }
+    if (p === '/bundle' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await launchBundle(b.txs)) }
     if (p === '/vault/mode' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, V.setMode(b.id, b.dev, b.mode, b.ceiling != null ? +b.ceiling : undefined)) }
     if (p === '/vault/renounce' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, V.renounce(b.id, b.dev)) }
     json(res, 404, { error: 'not found' })

@@ -294,7 +294,7 @@ export const rfqCancel = (id: string, seller: string) => j('/rfq/cancel', { id, 
 /** constant-product chart impact of selling `sol` worth into a pool with `liqSol` reserve */
 export const poolImpactBps = (sol: number, liqSol: number) => liqSol > 0 ? Math.round((1 - 1 / (1 + sol / liqSol) ** 2) * 10000) : 10000
 export const bundleSign = (id: string, mint: string, tx: string, maxSol: number, createTx?: string, auth?: DevAuth): Promise<{ tx: string; spend: number; tokens?: number }> => j('/vault/bundle-sign', { id, mint, tx, maxSol, createTx, auth })
-export const sendBundle = (txs: string[]): Promise<{ bundleId: string }> => j('/bundle', { txs })
+export const sendBundle = (txs: string[]): Promise<{ bundleId: string; sim?: string }> => j('/bundle', { txs })
 
 /** In-page bus: 'book' events (detail = mint) whenever the server says a book changed. */
 export const bookBus = new EventTarget()
