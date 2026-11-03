@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as MM from '../src/mm.ts'
+import { readFileSync } from 'node:fs'
 
 const PO = { ...MM.P, profitOnly: true, profitMinVolSol: 10, profitVolMult: 20, profitMargin: 0.04, warmupMs: 0 }
 const mk = (o = {}) => ({ chest: 2, tokens: 0, supply: 1e9, pct: 5, avgCost: 0, mode: 'mm', ceiling: 0.3, samples: [], high15: [], ema5: null, ema15: null, spentEpisode: 0, tranchesFired: [], lastBuy: 0, trimmedToday: 0, trimDay: 0, buyTimes: [], lastCapture: 0, ...o })
@@ -99,4 +100,27 @@ test('inventory skew: under target the slice sold into a buy shrinks with the ho
   assert.ok(Math.abs(MM.invSkew({ launchSpend: 7, supply: 1e9, tokens: 40e6 }, P) - 0.5) < 1e-9)
   assert.equal(MM.invSkew({ launchSpend: 7, supply: 1e9, tokens: 5e6 }, P), 0.25)
   assert.equal(MM.invSkew({ launchSpend: 0, supply: 1e9, tokens: 5e6 }, P), 1, 'fee-funded chests untouched')
+})
+
+test('shipped params keep ammo for the run: on a steady pump the chest still holds ≥45% of its launch coins at 4× and takes most of its SOL above 2×', () => {
+  // the Dockerfile's MM_* values, so this follows what is live
+  const env = Object.fromEntries([...readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8').matchAll(/\b(MM_[A-Z_]+)=([0-9.]+)/g)].map((m) => [m[1], +m[2]]))
+  const P = { ...MM.P, profitOnly: true, captureOn: true, warmupMs: 0, profitMinVolSol: 0, initialsFrac: env.MM_INITIALS_FRAC, takeFrac: env.MM_TAKE_FRAC, dynMin: env.MM_DYN_MIN, dynMax: env.MM_DYN_MAX,
+    dynRefSol: env.MM_DYN_REF_SOL, sniperFrac: env.MM_SNIPER_FRAC, sniperWindowMs: env.MM_SNIPER_WINDOW_MS, sniperKeep: env.MM_SNIPER_KEEP, sniperMinBuy: env.MM_SNIPER_MIN_BUY, captureDayCap: env.MM_CAPTURE_DAY_CAP }
+  assert.ok(P.dynMax <= 0.2 && P.sniperFrac <= 0.4, 'slices stay small')
+  let x = 30, y = 1073e6; const fee = 0.0125
+  const buy = (sol) => { const k = x * y; const nx = x + sol * (1 - fee); const ny = k / nx; const t = y - ny; x = nx; y = ny; return t }
+  const sell = (tok) => { const k = x * y; const ny = y + tok; const nx = k / ny; const out = x - nx; x = nx; y = ny; return out * (1 - fee) }
+  buy(0.5); const vTok = buy(7); const cost0 = 7 / vTok, t0 = 1e9
+  const s = mk({ chest: 0.9, tokens: vTok, pct: 20, avgCost: cost0, launchSpend: 7, invGot: 0, mmSpent: 0, mmGot: 0, mmTok: 0, mmCost: 0, sales: [], launchAt: t0, launchTok: vTok, sniperTax: true })
+  let lo = 0, hi = 0, heldAt4 = null; const sizes = [0.3, 1.2, 0.5, 0.8, 2, 0.4, 0.6, 1.5]
+  for (let i = 0; i < 4000 && x / y / cost0 < 8; i++) {
+    const t = t0 + 3000 + i * 4000, sol = sizes[i % sizes.length]; MM.observe(s, x / y, t, P); buy(sol); const p = x / y
+    const tok = MM.capture(s, { priceSol: p, mcapUsd: p * 1e9 * 180, liqSol: x, vol1h: 1e6 }, p, sol, t, P, 0.99, 0.5)
+    if (tok > 0) { const g = sell(tok); s.tokens -= tok; MM.bookSell(s, tok, g, t); s.chest += g; if (p / cost0 < 2) lo += g; else hi += g }
+    if (heldAt4 == null && x / y / cost0 >= 4) heldAt4 = s.tokens / vTok
+  }
+  assert.ok(heldAt4 >= 0.45, `holds ${(heldAt4 * 100).toFixed(0)}% of its coins at 4×`)
+  assert.ok(hi > 2 * lo, `SOL taken above 2× (${hi.toFixed(2)}) is over twice what it took under 2× (${lo.toFixed(2)})`)
+  assert.ok(lo > 0.5, 'still takes profit early')
 })
