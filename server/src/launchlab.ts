@@ -58,7 +58,11 @@ export const isOurs = (p: Pool | null) => !!p && !!PLATFORM_ID && p.platformId =
 /** our platform config as the chain has it (null until the admin signs CreatePlatformConfig) */
 export async function platform(): Promise<{ id: string; exists: boolean; feeRate?: number; creatorFeeRate?: number; feeWallet?: string; nftWallet?: string; name?: string } | null> {
   if (!PLATFORM_ID) return null
-  const info = await conn.getAccountInfo(PLATFORM_ID).catch(() => null)
+  // an RPC error is NOT "the platform doesn't exist": a 429 read as "missing" once sent a launch out under Raydium's platform while the
+  // vault's block-zero buy named ours — the buy failed inside the bundle and Jito dropped the whole launch, silently (Nov 3). Unknown = null.
+  let info: any = undefined
+  for (let i = 0; i < 3 && info === undefined; i++) { try { info = await conn.getAccountInfo(PLATFORM_ID) } catch { if (i < 2) await new Promise((r) => setTimeout(r, 400 + 600 * i)) } }
+  if (info === undefined) return null
   if (!info || info.data.length < 100) return { id: PLATFORM_ID.toBase58(), exists: false }
   let d: any; try { d = PlatformConfig.decode(info.data) } catch { return { id: PLATFORM_ID.toBase58(), exists: false } }
   return { id: PLATFORM_ID.toBase58(), exists: true, feeRate: +d.feeRate.toString() / 1e4, creatorFeeRate: +d.creatorFeeRate.toString() / 1e4, feeWallet: d.platformClaimFeeWallet.toBase58(), nftWallet: d.platformLockNftWallet.toBase58(), name: Buffer.from(d.name).toString('utf8').replace(/\0+$/, '') }
@@ -67,8 +71,9 @@ let platformExists = false
 /** Self-setup: when the server key is the admin and the platform config is not on chain yet, create it as soon as the platform wallet can pay the rent (~0.006 SOL + fee). Returns the signature or null. */
 let platformRetryAt = 0
 export async function ensurePlatform(): Promise<string | null> {
-  if (platformExists || !SELF_ADMIN || !PLATFORM_ID || Date.now() < platformRetryAt) return null
-  const p = await platform(); if (p?.exists) { platformExists = true; return null }
+  if (platformExists || !PLATFORM_ID || Date.now() < platformRetryAt) return null
+  // also the warm-up: read once 8 s after boot, so the first launch after a deploy doesn't have to read it under load
+  const p = await platform(); if (p?.exists) { platformExists = true; return null } if (!p || !SELF_ADMIN) return null   // couldn't read the chain: ask again next time
   const kp = platformKeypair(); const bal = (await conn.getBalance(kp.publicKey).catch(() => 0)) / 1e9; if (bal < 0.012) return null
   try {
     const { tx } = await buildPlatformTx(kp.publicKey); const vt = VersionedTransaction.deserialize(Buffer.from(tx, 'base64')); vt.sign([kp])
@@ -105,12 +110,12 @@ export function appendTransfer(t: VersionedTransaction, luts: AddressLookupTable
   if (size > 1232) throw new Error(`create + stake transfer is ${size > 9000 ? 'over' : size} bytes (max 1232)`)
   return nt
 }
-export type LaunchBuild = { mint: string; poolId: string; txs: string[]; restamp: (blockhash: string) => string[]; addTransfer: (to: PublicKey, lamports: number) => Promise<number>; devTokens: number; devCostSol: number; afterDev: { virtualA: bigint; virtualB: bigint; realA: bigint; realB: bigint }; permTax: number }
+export type LaunchBuild = { mint: string; poolId: string; platformId: PublicKey; txs: string[]; restamp: (blockhash: string) => string[]; addTransfer: (to: PublicKey, lamports: number) => Promise<number>; devTokens: number; devCostSol: number; afterDev: { virtualA: bigint; virtualB: bigint; realA: bigint; realB: bigint }; permTax: number }
 /** The create (+ dev buy) tx(s) for the dev to sign; the mint keypair has already co-signed. Platform = ours (must exist on chain). */
 export async function buildLaunch(dev: PublicKey, meta: { name: string; symbol: string; uri: string }, devBuySol: number, platformId: PublicKey | null = PLATFORM_ID, permTax = false): Promise<LaunchBuild> {
   if (!platformId) throw new Error('no platform configured (PLATFORM_ADMIN)')
   // until our platform config is on chain (platform wallet funded → ensurePlatform), launches still go out under Raydium's own platform: no tax to the chest, but nothing blocks a launch
-  if (platformId.equals(PLATFORM_ID!) && !platformExists) { const p = await platform(); if (p?.exists) platformExists = true; else platformId = LAUNCHPAD_PLATFORM }
+  if (platformId.equals(PLATFORM_ID!)) platformId = await launchPlatform()
   const { kp: mintKp, branded } = MP.next()
   let r: any
   try { r = await withOwner(dev, (r) => r.launchpad.createLaunchpad({
@@ -133,8 +138,19 @@ export async function buildLaunch(dev: PublicKey, meta: { name: string; symbol: 
     for (const l of t.message.addressTableLookups) { const a = (await conn.getAddressLookupTable(l.accountKey)).value; if (!a) throw new Error('lookup table not found'); luts.push(a) }
     txs[i] = appendTransfer(t, luts, dev, to, lamports); return txs[i].serialize().length
   }
-  return { mint: mintKey, poolId: poolIdOf(mintKey).toBase58(), txs: restamp((await conn.getLatestBlockhash('confirmed')).blockhash), restamp, addTransfer, devTokens: z.tokens, devCostSol: z.cost, afterDev: z.after, permTax: permTax ? PERM_TAX_BPS : 0 }
+  return { mint: mintKey, poolId: poolIdOf(mintKey).toBase58(), platformId, txs: restamp((await conn.getLatestBlockhash('confirmed')).blockhash), restamp, addTransfer, devTokens: z.tokens, devCostSol: z.cost, afterDev: z.after, permTax: permTax ? PERM_TAX_BPS : 0 }
 }
+/** the platform a new coin launches under: ours once it is on chain (cached for good), Raydium's only when ours is truly not there yet.
+ *  When the chain can't be read it throws a 429-shaped error, so the build is retried instead of launching under the wrong platform. */
+export async function launchPlatform(): Promise<PublicKey> {
+  if (!PLATFORM_ID) throw new Error('no platform configured (PLATFORM_ADMIN)')
+  if (platformExists) return PLATFORM_ID
+  const p = await platform()
+  if (p?.exists) { platformExists = true; return PLATFORM_ID }
+  if (p) return LAUNCHPAD_PLATFORM
+  throw new Error('429 Too Many Requests: could not read the launchpad platform on chain — building again')
+}
+export const _platformCache = (v?: boolean) => { if (v !== undefined) platformExists = v; return platformExists }   // tests
 // default config curve (SDK LaunchpadPoolInitParam): virtual 30.00085 SOL × 1,073,025,605.6 tokens, 793.1M on the curve, 85 SOL raise
 const CURVE_DEFAULT = { virtualA: 1_073_025_605_596_382n, virtualB: 30_000_852_951n, totalSellA: 793_100_000_000_000n, totalFundRaisingB: 85_000_000_000n, supply: 1_000_000_000_000_000n }
 /** Higher-liquidity launches: same coin (1B supply, 79.31% on the curve, same fees, same chest), deeper pool. LL_RAISE_SOL = SOL raised before

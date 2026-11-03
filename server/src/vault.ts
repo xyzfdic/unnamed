@@ -1326,7 +1326,7 @@ async function buildLaunchOnce(b: { dev: string; name: string; symbol: string; u
     v.mint = built.mint; v.uri = b.uri; v.symbol = b.symbol; v.name = b.name   // bound now even with no vault buy, so the vault can arm itself once the coin is on chain
     v.vaultBuySol = vaultSpend   // the real block-zero spend (after caps): it is the vault's cost basis and the initials to recover
     if (vaultSpend >= 0.05) {
-      const tx = await LL.buildTrade(kp(v).publicKey, 'buy', built.mint, vaultSpend, { poolState: built.afterDev, fromCreate: true, slippageBps: 1000, tipLamports: Math.floor(+(process.env.LAUNCH_TIP_SOL || process.env.TIP_SOL || 0.003) * 1e9), permTaxBps: built.permTax })
+      const tx = await LL.buildTrade(kp(v).publicKey, 'buy', built.mint, vaultSpend, { poolState: built.afterDev, fromCreate: true, platformId: built.platformId, slippageBps: 1000, tipLamports: Math.floor(+(process.env.LAUNCH_TIP_SOL || process.env.TIP_SOL || 0.003) * 1e9), permTaxBps: built.permTax })
       // one fresh blockhash for the whole bundle, stamped last (create re-signed by the mint, the vault buy signed after) — nothing slow runs after this
       const lb = await conn.getLatestBlockhash('confirmed'); launchTxs = built.restamp(lb.blockhash); if (tx.message.header.numRequiredSignatures === 1) tx.message.recentBlockhash = lb.blockhash
       KEEP.sign({ id: v.id, chest: bal, sk: kp(v) }, tx, 'launch', vaultSpend)
