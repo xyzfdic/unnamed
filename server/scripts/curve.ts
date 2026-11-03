@@ -1,10 +1,14 @@
-// read-only: wait for the new commit, then the live pump chest — holdings, last moves, events since deploy
-const S = 'https://unnamed-server.onrender.com'; const want = '43244723'; const K = process.env.ADMIN_KEY || ''
-const get = async (p: string) => { try { const r = await fetch(S + p, { signal: AbortSignal.timeout(30000) }); return await r.json().catch(() => null) } catch (e: any) { return { err: String(e?.message || e) } } }
-const t0 = Date.now(); let h: any = null; while (Date.now() - t0 < 600_000) { h = await get('/health'); if (h?.commit === want) break; await new Promise((r) => setTimeout(r, 15000)) }
-console.log('HEALTH after', Math.round((Date.now() - t0) / 1000), 's', h?.commit); await new Promise((r) => setTimeout(r, 90_000))
-const v: any = await get('/vault/mint/fe3hPZHUdMkRdL54pwdUSkgBY4LkH5esocrbSjVBANK')
-console.log('CHEST', v?.symbol, 'chest', v?.chest?.toFixed(4), 'tokens', Math.round(v?.tokens || 0), 'pct', ((v?.tokens || 0) / (v?.supply || 1e9) * 100).toFixed(2) + '%', 'price', v?.live?.price, 'vwap30', v?.live?.vwap30, 'stretch', v?.live?.stretch, 'sold', v?.score?.captured?.toFixed(3), 'sales', v?.score?.captures, 'devPaid', v?.devPaid?.toFixed(4))
-for (const a of (v?.activity || []).slice(0, 12)) console.log('  ', new Date(a.t).toISOString().slice(11, 19), a.kind, a.sol != null ? (+a.sol).toFixed(4) : '', String(a.msg || '').slice(0, 140))
-const ev: any = await get('/admin/events?key=' + encodeURIComponent(K) + '&since=' + (Date.now() - 6 * 60_000)); for (const e of (ev?.events || []).filter((e: any) => !/capture/.test(e.msg)).slice(-12)) console.log('EV', new Date(e.t).toISOString().slice(11, 19), e.kind, String(e.msg).slice(0, 200))
-console.log('WALLET', JSON.stringify(await get('/admin/wallet?key=' + encodeURIComponent(K))))
+// read-only: every vault-wallet tx in the last 30 min — SOL and coin change, which programs, and transfers out (to where)
+import { PublicKey } from '@solana/web3.js'
+const { conn } = await import('../src/chain.ts')
+const B = 'BANKYubgHd48UQt2VFtEytyE8QyeBHhiuptC3tHmfVPH', MINT = 'fe3hPZHUdMkRdL54pwdUSkgBY4LkH5esocrbSjVBANK'
+const sigs = (await conn.getSignaturesForAddress(new PublicKey(B), { limit: 120 })).filter((s) => (s.blockTime || 0) * 1000 > Date.now() - 40 * 60_000).reverse()
+console.log('TXS', sigs.length)
+for (const s of sigs) {
+  const tx: any = await conn.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null); if (!tx) { console.log(s.signature.slice(0, 8), 'unreadable'); continue }
+  const keys = tx.transaction.message.accountKeys.map((k: any) => k.pubkey.toBase58()); const i = keys.indexOf(B); const dSol = i >= 0 ? (tx.meta.postBalances[i] - tx.meta.preBalances[i]) / 1e9 : 0
+  const tb = (arr: any[]) => (arr || []).filter((b: any) => b.owner === B && b.mint === MINT).reduce((a: number, b: any) => a + (+b.uiTokenAmount.uiAmount || 0), 0); const dTok = tb(tx.meta.postTokenBalances) - tb(tx.meta.preTokenBalances)
+  const signer0 = keys[0]; const progs = [...new Set(tx.transaction.message.instructions.map((x: any) => x.programId?.toBase58?.() || x.programId).map((p: string) => p.slice(0, 6)))].join(',')
+  const outs = tx.transaction.message.instructions.filter((x: any) => x.program === 'system' && x.parsed?.type === 'transfer' && x.parsed.info.source === B).map((x: any) => `${(x.parsed.info.lamports / 1e9).toFixed(4)}→${x.parsed.info.destination.slice(0, 6)}`)
+  console.log(new Date((s.blockTime || 0) * 1000).toISOString().slice(11, 19), s.signature.slice(0, 8), s.err ? 'ERR' : 'ok', 'sol', dSol.toFixed(4), 'coins', (dTok / 1e6).toFixed(2) + 'M', 'payer', signer0.slice(0, 6), 'progs', progs, outs.length ? 'OUT ' + outs.join(' ') : '')
+}
