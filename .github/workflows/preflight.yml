@@ -1,9 +1,10 @@
 name: Mainnet preflight (no funds)
+# Not on every push to main any more: a run makes hundreds of RPC calls on the same key the live server uses, and on Nov 3 one
+# overlapped a launchpad launch (the build hit 429s). Run it on purpose, when no launch is going on: push to the `preflight` branch.
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths: ['server/**', '.github/workflows/preflight.yml']
+    branches: [preflight]
 permissions:
   contents: write
 jobs:

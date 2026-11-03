@@ -1,8 +1,7 @@
 name: Vamp scan (live board)
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '23 */2 * * *'
+  # (no schedule: every 2 h it shared the live server's RPC key; the server runs the same scan itself every minute)
   push:
     branches: [main]
     paths: ['server/src/vamp.ts', 'server/scripts/vampscan.ts']

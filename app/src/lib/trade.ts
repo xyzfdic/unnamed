@@ -179,7 +179,9 @@ async function launchOursOnce(ctx: Ctx, meta: P.CreateMeta, uri: string, devBuyS
   let b: Awaited<ReturnType<typeof K.llLaunchBuild>> | undefined
   for (const t0 = Date.now(); ;) {
     try { b = await K.withDevAuth(vault ? deps.signMsg : undefined, 'launch', vault?.id || '', owner.toBase58(), (auth) => deps.venue === 'pump' ? K.pumpLaunchBuild(req(auth)) : K.llLaunchBuild(req(auth))) as any; break }
-    catch (e: any) { if (!/can still land|could not check the last launch/i.test(String(e?.message || e)) || Date.now() - t0 > 100_000) throw e; onStatus?.(`Waiting for the last attempt to expire (${Math.round((Date.now() - t0) / 1000)} s)…`); await new Promise((r) => setTimeout(r, 4000)) }
+    catch (e: any) { const m = String(e?.message || e); const busy = /429|too many requests|rate limit|vault is busy/i.test(m)
+      if (!(busy || /can still land|could not check the last launch/i.test(m)) || Date.now() - t0 > 100_000) throw e
+      onStatus?.(busy ? `The network is busy — building again (${Math.round((Date.now() - t0) / 1000)} s)…` : `Waiting for the last attempt to expire (${Math.round((Date.now() - t0) / 1000)} s)…`); await new Promise((r) => setTimeout(r, busy ? 3000 : 4000)) }
   }
   if (!b) throw new Error('launch build failed')
   const left = b.fundSol ? 'nothing was spent' : 'your stake is still in the vault'

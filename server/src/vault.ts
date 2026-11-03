@@ -1002,7 +1002,10 @@ async function tickOne(v: Vault) {
   if (!v.armed || !v.mint || inflight.has(v.id) || (v as any).closing) return
   // a withdrawn vault that holds nothing has nothing left to do: switch it off (one was left armed on a dead mint on Oct 30)
   if ((v as any).closedAt && v.chest < 0.01 && v.tokens <= 0) { v.armed = false; v.activity.unshift({ t: Date.now(), kind: 'note', msg: 'switched off: closed and withdrawn, nothing left in it' }); save(); return }
-  if (Date.now() < (v.nextTickAt || 0)) return; v.nextTickAt = Date.now() + 3500 + Math.random() * 3000
+  if (Date.now() < (v.nextTickAt || 0)) return
+  // a chest with nothing left (no SOL to buy with, no coins to sell) only needs a look once a minute: the RPC budget goes to live chests and launches
+  const idle = v.armed && v.shared && (v.chest || 0) < 0.02 && (v.tokens || 0) < 1 && !(v as any).catchUp
+  v.nextTickAt = Date.now() + (idle ? 60_000 + Math.random() * 10_000 : 3500 + Math.random() * 3000)
   inflight.add(v.id); const tok = ++tickTok; inflightAt.set(v.id, { t: Date.now(), tok }); (v as any).lastTickAt = Date.now()
   {
     try {
@@ -1233,8 +1236,12 @@ const noteBuilt = (v: Vault, mint: string) => { (v as any).buildAt = Date.now();
 /** pump.fun launch built on the server, the same way as ours: the mint is a …BANK key from our pool (we mint-sign the create, so the dev can't
  *  rebuild it without the stake), PumpPortal builds [create + dev buy + Jito tip] for the dev and the vault's block-zero buy, and the stake
  *  rides inside the create — one wallet signature, all-or-nothing in one Jito bundle. */
+/** an RPC that answers 429 (rate limit) mid-build: wait and build again, up to 3 tries — a busy RPC must not read as "can't launch" */
+async function ride429<T>(f: () => Promise<T>): Promise<T> {
+  for (let i = 0; ; i++) { try { return await f() } catch (e: any) { if (i >= 2 || !/429|too many requests|rate limit/i.test(String(e?.message || e))) throw e; EV.log('vault', `launch build hit the RPC rate limit — retrying (${i + 1}/2)`); await wait(1500 * (i + 1) + Math.random() * 500) } }
+}
 export async function buildPumpLaunch(b: { dev: string; name: string; symbol: string; uri: string; devBuySol?: number; vaultId?: string; vaultBuySol?: number; fundInBundle?: boolean; tipSol?: number; auth?: { msg?: string; sig?: string } }) {
-  return b.vaultId ? withVaultOp(b.vaultId, 'launch build', () => buildPumpLaunchOnce(b)) : buildPumpLaunchOnce(b)
+  return b.vaultId ? withVaultOp(b.vaultId, 'launch build', () => ride429(() => buildPumpLaunchOnce(b))) : ride429(() => buildPumpLaunchOnce(b))
 }
 async function buildPumpLaunchOnce(b: { dev: string; name: string; symbol: string; uri: string; devBuySol?: number; vaultId?: string; vaultBuySol?: number; fundInBundle?: boolean; tipSol?: number; auth?: { msg?: string; sig?: string } }) {
   const dev = new PK(b.dev); const devBuy = Math.max(0, +(b.devBuySol || 0)); const t0 = Date.now()
@@ -1293,7 +1300,7 @@ async function buildPumpLaunchOnce(b: { dev: string; name: string; symbol: strin
 /** SOL the dev has staked into this vault so far (booked funding txs) */
 const fundedSol = (v: Vault) => v.activity.filter((a) => a.kind === 'stake').reduce((a, x) => a + (x.sol || 0), 0)
 export async function buildLaunch(b: { dev: string; name: string; symbol: string; uri: string; devBuySol?: number; vaultId?: string; vaultBuySol?: number; permTax?: boolean; fundInBundle?: boolean; auth?: { msg?: string; sig?: string } }) {
-  return b.vaultId ? withVaultOp(b.vaultId, 'launch build', () => buildLaunchOnce(b)) : buildLaunchOnce(b)
+  return b.vaultId ? withVaultOp(b.vaultId, 'launch build', () => ride429(() => buildLaunchOnce(b))) : ride429(() => buildLaunchOnce(b))
 }
 async function buildLaunchOnce(b: { dev: string; name: string; symbol: string; uri: string; devBuySol?: number; vaultId?: string; vaultBuySol?: number; permTax?: boolean; fundInBundle?: boolean; auth?: { msg?: string; sig?: string } }) {
   const dev = new PK(b.dev); const devBuy = Math.max(0, +(b.devBuySol || 0))
