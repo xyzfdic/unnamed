@@ -49,3 +49,13 @@ test('without a token nothing is queued or sent', async () => {
   try { assert.equal(AL.enabled(), false); AL.send('x'); AL.route({ t: 1, kind: 'error', msg: 'boom' }); await sleep(20); assert.equal(calls.length, 0) }
   finally { process.env.TELEGRAM_BOT_TOKEN = tok }
 })
+
+test('the evening summary goes out once a day, after the hour, in Houston time', async () => {
+  AL.setDaily(async () => 'BANKER · last 24 h')
+  const at = (iso) => Date.parse(iso)
+  assert.equal(await AL.dailyTick(at('2026-11-03T02:00:00Z')), false, '8 pm in Houston: not yet')
+  assert.equal(await AL.dailyTick(at('2026-11-03T03:05:00Z')), true, '9:05 pm: sent')
+  assert.equal(await AL.dailyTick(at('2026-11-03T04:30:00Z')), false, 'once per day')
+  assert.equal(await AL.dailyTick(at('2026-11-04T03:01:00Z')), true, 'next evening')
+  await sleep(30); assert.equal(sent(111).map((c) => c.body.text).join('\n').split('last 24 h').length - 1, 2, 'two summaries went out (batched together here)')
+})

@@ -723,6 +723,27 @@ export function retire(id: string) { const v = vaults[id]; if (!v) throw new Err
 export const get = (id: string) => vaults[id] ? pub(vaults[id]) : null
 export const byMint = (mint: string) => { const v = Object.values(vaults).find((x) => x.mint === mint); return v ? pub(v) : null }
 export const list = () => Object.values(vaults).filter((v) => v.armed).map(pub)
+/** Public receipts: every launch with a chest, its sniper report (read off the chain), what the chest sold into buys and the fees it
+ *  got — all booked from real transaction deltas. No per-coin result here: books that were moved outside can't give one, and the totals
+ *  are what the chests actually did, not what anyone made. */
+export function receipts() {
+  const rows = Object.values(vaults).filter((v) => !v.paper && v.mint && v.armedAt).sort((a, b) => (b.armedAt || 0) - (a.armedAt || 0)).map((v) => {
+    const sc: any = v.score || {}; const sn = (v as any).sniper || null
+    return { mint: v.mint!, symbol: v.symbol || '', name: v.name || '', image: v.image, venue: v.venue || 'pump', launchedAt: v.armedAt, vaultWallet: v.pub,
+      sniper: sn ? { buys: sn.buys, buySol: sn.buySol, wallets: sn.wallets, blockZeroSol: sn.blockZeroSol, soldInto: sn.soldInto } : null,
+      soldSol: +(sc.captured || 0).toFixed(4), sales: sc.captures || 0, feesSol: +(v.taxClaimed || 0).toFixed(4), live: !!v.armed }
+  })
+  const sum = (f: (r: any) => number) => +rows.reduce((a, r) => a + f(r), 0).toFixed(4)
+  return { at: Date.now(), launches: rows.length, sniperSol: sum((r) => r.sniper?.buySol || 0), soldIntoSnipers: sum((r) => r.sniper?.soldInto || 0), soldSol: sum((r) => r.soldSol), sales: rows.reduce((a, r) => a + r.sales, 0), feesSol: sum((r) => r.feesSol), rows }
+}
+/** every chest's moves since `since` (raw activity, not the trimmed public copy): launches armed, sales into buys, fees in */
+export function movesSince(since: number) {
+  const vs = Object.values(vaults).filter((v) => !v.paper)
+  const launched = vs.filter((v) => (v.armedAt || 0) > since && v.mint).map((v) => ({ symbol: v.symbol || '?', venue: v.venue || 'pump', mint: v.mint!, sniper: (v as any).sniper || null }))
+  let sold = 0, sales = 0, fees = 0
+  for (const v of vs) for (const a of v.activity) { if (a.t <= since) continue; if (a.kind === 'capture') { sold += a.sol || 0; sales++ } else if (a.kind === 'tax') fees += a.sol || 0 }
+  return { launched, sold: +sold.toFixed(4), sales, fees: +fees.toFixed(4) }
+}
 export const byDev = (dev: string) => Object.values(vaults).filter((v) => v.dev === dev).map(pub)
 /** Family tree + leader flag: L = aged_mcap × √(1h vol). The leader is whichever member scores highest. */
 export async function family(mint: string) {

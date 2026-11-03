@@ -271,3 +271,9 @@ test('the launch report hides the result when a chest holds less than its own bo
   finally { raw.score = keep }
   assert.equal(V.list().find((x) => x.id === id).report.fitted, false)
 })
+test('receipts: every launch with its sniper report, sales into buys and fees — totals add up, no per-coin result', () => {
+  const r = V.receipts(); assert.ok(r.launches >= 1 && r.rows.length === r.launches)
+  assert.ok(Math.abs(r.soldSol - r.rows.reduce((a, x) => a + x.soldSol, 0)) < 1e-3 && Math.abs(r.feesSol - r.rows.reduce((a, x) => a + x.feesSol, 0)) < 1e-3)
+  for (const x of r.rows) { assert.ok(x.mint && x.vaultWallet && x.launchedAt); assert.equal('result' in x, false); assert.equal('chest' in x, false) }
+  assert.ok(r.rows.every((x, i) => i === 0 || r.rows[i - 1].launchedAt >= x.launchedAt), 'newest first')
+})

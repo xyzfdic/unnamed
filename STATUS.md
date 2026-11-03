@@ -16,6 +16,19 @@
 - Live: server on Render (`unnamed-server.onrender.com`, helius, gate on, 2 SOL chest cap, 1 SOL import tier), app at `app.banker.cash`, landing at `banker.cash`. One brand wallet `BANKY…` is every vault (top holder on every coin) with per-vault chest ledgers booked from tx deltas; launched mints end in `…BANK` from a pre-ground pool; launch metadata self-hosted. Drawdown stop on the mm leg. Paper vault runs on CI against live coins (`paper.yml`).
 - Tests: server 35/35, app 20/20, e2e launch 21 (+21 in shared-wallet mode) · gate 15 · desk 50 · app 22 · import 16 · mm 10; mainnet: platform config created, platform fee claim (1.16 SOL) landed, a holder sell simulates clean. See POSTMORTEM.md for the first live launch.
 
+## Handoff (2026-11-02 night) — receipts, evening summary, move-day tooling
+- **Launch receipts** (`GET /receipts`, app `#/receipts`, in More): every launch with a chest — snipers' first minute (from chain), sold
+  into snipers, sold into buys, fees in — with solscan links for the coin and the vault wallet. Totals on top + Post on X. No per-coin
+  profit on purpose (books moved outside on the Oct 30 coins); these are what the chests did, from their own tx deltas.
+- **Evening Telegram summary** at 21:00 America/Chicago (TELEGRAM_DAILY_HOUR / TELEGRAM_TZ): launches, sales into buys, fees, sniper
+  lines, the vault wallet split, error count. Once a day (kept in telegram.json).
+- **Move day (region change)**: `STANDBY=1` = reads only (no tick, stream, claims, platform setup, vamp scan, desk responder; every POST →
+  503 "moving servers"). `GET /admin/export?key[&all=1]` (tapes/px/meta only with all=1) → `POST /admin/import?key[&force=1]` on a server
+  that is on STANDBY, same VAULT_SECRET + VAULT_KEY (fingerprint checked), from an export taken on standby, never over existing data
+  without force, no path escapes. `scripts/move.ts` (OLD, NEW, ADMIN_KEY) checks both are on standby and the same vault wallet, copies.
+  Order: old → STANDBY=1 · new service (Frankfurt, same env incl. VAULT_SECRET, disk at /data, STANDBY=1) · run move.ts · new →
+  STANDBY=0 · point the app at the new URL · delete the old service. Never two servers trading at once.
+
 ## Handoff (2026-11-02 evening) — smoother launches, honest withdrawals, alerts
 - **Launch form**: "Where it launches" is a labelled choice (BANKER launchpad = Raydium LaunchLab, "NOT on pump.fun"), the last choice is
   remembered, and the button names the venue ("Launch on pump.fun"). Paying from the vault wallet (BANKY…) is refused in the form

@@ -9,7 +9,7 @@ import * as EV from './events.ts'
 const TOKEN = () => process.env.TELEGRAM_BOT_TOKEN || ''
 const FILE = () => (process.env.DATA_DIR || './data') + '/telegram.json'
 const api = (m: string) => `https://api.telegram.org/bot${TOKEN()}/${m}`
-type St = { chat?: number | string; offset?: number }
+type St = { chat?: number | string; offset?: number; dailyOn?: string }
 let st: St = (() => { try { return existsSync(FILE()) ? JSON.parse(readFileSync(FILE(), 'utf8')) : {} } catch { return {} } })()
 const persist = () => { try { mkdirSync(process.env.DATA_DIR || './data', { recursive: true }); writeFileSync(FILE(), JSON.stringify(st)) } catch {} }
 export const enabled = () => !!TOKEN()
@@ -76,10 +76,23 @@ export async function handle(u: any) {
   if (cmd === '/status') { let s = 'status unavailable'; try { if (statusFn) s = await statusFn() } catch (e: any) { s = 'status failed: ' + esc(String(e?.message || e).slice(0, 120)) } await call('sendMessage', { chat_id: id, text: s, parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {}); return }
   if (cmd === '/help') await call('sendMessage', { chat_id: id, text: HELP }).catch(() => {})
 }
+// ---- the evening summary: once a day at TELEGRAM_DAILY_HOUR (21) in TELEGRAM_TZ (America/Chicago); the day it went out is kept ----
+let dailyFn: (() => Promise<string>) | null = null
+export const setDaily = (f: () => Promise<string>) => { dailyFn = f }
+const local = (now: number) => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: process.env.TELEGRAM_TZ || 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(now).map((x) => [x.type, x.value])); return { day: `${p.year}-${p.month}-${p.day}`, hour: +p.hour } }
+/** sends the summary when it's past the hour and today's hasn't gone out. Returns true when it sent. */
+export async function dailyTick(now = Date.now()) {
+  if (!enabled() || !dailyFn || chat() == null) return false
+  const { day, hour } = local(now); if (hour < +(process.env.TELEGRAM_DAILY_HOUR || 21) || st.dailyOn === day) return false
+  st.dailyOn = day; persist()
+  let text = ''; try { text = await dailyFn() } catch (e: any) { text = 'daily summary failed: ' + esc(String(e?.message || e).slice(0, 120)) }
+  send(text); return true
+}
 let polling = false
 /** long-polls getUpdates for /start, /status. Two server instances during a deploy both poll: Telegram answers the loser 409 — it waits. */
 export async function start() {
   if (!enabled() || polling) return; polling = true; EV.onLog(route)
+  setInterval(() => { dailyTick().catch(() => {}) }, 5 * 60_000)
   for (;;) {
     try {
       const ups: any[] = await call('getUpdates', { offset: st.offset || 0, timeout: 50, allowed_updates: ['message'] }, 65_000)

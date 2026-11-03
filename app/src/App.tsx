@@ -6,6 +6,7 @@ import * as K from './lib/desk'
 import { setLaunchCurve } from './lib/protocol'
 import { DeskPage, VaultPage, MinePage, LeaderboardPage, ImportPage, RfqPing, plainRefundErr } from './components/Desk'
 import Launched, { type LaunchedInfo } from './components/Launched'
+import Receipts from './components/Receipts'
 import { due, removeOrder, loadOrders } from './lib/orders'
 import { confirmByPolling } from './lib/rpc'
 import WalletPanel from './components/WalletPanel'
@@ -38,7 +39,7 @@ const I = {
   me: <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="8.5" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>,
 }
 const NAV: [string, string, string, React.ReactNode][] = [['home', 'Home', 'coins to watch', I.bank], ['vault', 'Vault', 'chests that defend coins', I.safe], ['desk', 'Desk', 'big trades, off the chart', I.desk], ['portfolio', 'Portfolio', 'what you own', I.me]]
-const MORE: [string, string][] = [['dev', 'My launches'], ['vault/import', 'Add a chest to a coin'], ['settings', 'Settings'], ['docs', 'How it works']]
+const MORE: [string, string][] = [['dev', 'My launches'], ['receipts', 'Launch receipts'], ['vault/import', 'Add a chest to a coin'], ['settings', 'Settings'], ['docs', 'How it works']]
 
 function Tabs({ tabs, sel, go }: { tabs: [string, React.ReactNode][]; sel: string; go: (t: string) => void }) {
   const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -320,6 +321,7 @@ export default function App() {
     if (page === 'portfolio') return <Portfolio onConnect={needWallet} sol={ws.sol} tokens={ws.tokens} coins={byMint} lots={ledger.lots} fills={ledger.fills} solPrice={solPrice} go={go} owner={ws.owner} />
     if (page === 'settings') return <SettingsPage s={settings} set={setSettings} owner={ws.owner || undefined} signTx={ctx()?.sign} conn={connection} />
     if (page === 'about') return <About />
+    if (page === 'receipts') return <Receipts go={go} />
     if (page === 'compare') return <Compare coins={coins} vaults={vaultList} solPrice={solPrice} go={go} />
     if (page === 'docs') return <Tabs tabs={[['How it works', <About />], ['Simulate', <Simulate />], ['Vaulted vs not', <Compare coins={coins} vaults={vaultList} solPrice={solPrice} go={go} />], ['Leaderboard', <LeaderboardPage owner={ws.owner} />]]} sel={arg} go={(t) => go('docs/' + t)} />
     if (page === 'simulate') return <Simulate />
@@ -366,6 +368,7 @@ export default function App() {
         <a href="#/docs" onClick={() => setMore(false)}>{Ic.book(18)}<span>How it works</span></a>
         <a href="#/settings" onClick={() => setMore(false)}>{Ic.gear(18)}<span>Settings</span></a>
         <a href="#/leaderboard" onClick={() => setMore(false)}>{Ic.trophy(18)}<span>Leaderboard</span></a>
+        <a href="#/receipts" onClick={() => setMore(false)}>{Ic.book(18)}<span>Launch receipts</span></a>
       </div>
       <button className="s-sheet-pro" onClick={() => { toggleSimple(); setMore(false) }}>Switch to Pro mode · charts, desk, all the tools</button>
     </div></div>}

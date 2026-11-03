@@ -25,6 +25,7 @@ createServer(async (req, res) => {
   if (p.startsWith('/dev/')) return json([{ ...vaultPub, id: 'v9', mint: MINT, symbol: 'OURS', dev: p.slice(5), armed: false, chest: 0.5, createdAt: Date.now() }])
   if (p === '/vault/withdraw-preview') return json(previewOk ? { ok: true, why: '', sol: 0.499, chest: 0.5, tokens: 0, tokensSol: 0, sells: false, staked: 0.5, full: true, to: 'DEVxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', wallet: { address: 'BANKYubgHd48UQt2VFtEytyE8QyeBHhiuptC3tHmfVPH', held: 10.55, booked: 0.13, free: 10.42 } } : { ok: false, why: 'this chest has traded, so it stays with the coin — that is what holds the floor for holders', sol: 0, chest: 0.5, tokens: 0, tokensSol: 0, sells: false, staked: 0.5, full: false, to: 'DEVxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' })
   if (p === '/vault/refund') return json({ sig: '5'.repeat(88), sol: 0.499 })
+  if (p === '/receipts') return json({ at: Date.now(), launches: 2, sniperSol: 43.76, soldIntoSnipers: 7.07, soldSol: 47.16, sales: 215, feesSol: 8.92, rows: [{ mint: MINT, symbol: 'OURS', name: 'Ours', venue: 'launchlab', launchedAt: Date.now() - 3 * 86400e3, vaultWallet: 'BANKYubgHd48UQt2VFtEytyE8QyeBHhiuptC3tHmfVPH', sniper: { buys: 49, buySol: 37.2, wallets: 37, blockZeroSol: 3.1, soldInto: 6.4 }, soldSol: 33.447, sales: 143, feesSol: 8.92, live: true }, { mint: MINT3, symbol: 'PMPY', name: 'Pumpy', venue: 'pump', launchedAt: Date.now() - 2 * 86400e3, vaultWallet: 'BANKYubgHd48UQt2VFtEytyE8QyeBHhiuptC3tHmfVPH', sniper: { buys: 7, buySol: 6.56, wallets: 7, blockZeroSol: 0, soldInto: 0.665 }, soldSol: 13.713, sales: 72, feesSol: 0, live: true }] })
   if (p === '/health') return json({ ok: true, vaultWallet: healthVW, vaults: 0, desk: { openBids: 0 }, beta: { keeper: {} } })
   if (p === '/ll/platform') return json({ venue: 'launchlab', permTaxBps: 0, platformId: 'PLAT', admin: 'ADMIN', feeWallet: 'FEE', taxBps: 200, creatorFeeBps: 50, chain: { id: 'PLAT', exists: true, feeRate: 2, creatorFeeRate: 0.5 } })
   if (p === '/ipfs') return json({ uri: 'https://ipfs.io/ipfs/test' })
@@ -171,6 +172,11 @@ await pg.locator('button', { hasText: /^Vault/ }).first().click().catch(() => {}
 const lr = await pg.locator('.lr').innerText().catch(() => '')
 chk('launch report for the creator: put in, snipers, sold into buys, fees, holds, result ' + JSON.stringify(lr.slice(0, 120)), /Put in\s+7\.79/.test(lr) && /Sold into buys\s+\+3\.10/.test(lr) && /14 buys/.test(lr) && /Result so far/.test(lr))
 await pg.locator('.lr').screenshot({ path: join(SC, 'launch-report.png') }).catch(() => {}); reportDev = ''
+// ---- public launch receipts ----
+await pg.goto('http://localhost:4197/#/receipts'); await pg.waitForTimeout(1500)
+const rc = await pg.locator('.rc').innerText().catch(() => '')
+chk('receipts page: totals + one row per launch with on-chain links', /Launches\s+2/i.test(rc) && /47\.16 SOL/.test(rc) && (await pg.locator('.rc-table tbody tr').count()) === 2 && (await pg.locator('.rc-table a', { hasText: 'chest' }).first().getAttribute('href').catch(() => '')).includes('solscan.io/account/BANKY'))
+await pg.locator('.rc').screenshot({ path: join(SC, 'receipts.png') }).catch(() => {})
 // ---- withdraw: what it will do, before anything is signed ----
 await pg.goto('http://localhost:4197/#/mine'); await pg.waitForTimeout(1500)
 await pg.locator('button', { hasText: 'Refund stake' }).first().click().catch(() => {}); await pg.waitForTimeout(600)

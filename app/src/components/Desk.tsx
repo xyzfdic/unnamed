@@ -380,7 +380,7 @@ export function LaunchReport({ v, symbol }: { v: K.VaultPub; symbol: string }) {
     {r.fitted ? <div className="nm" style={{ marginTop: 8 }}><b>Result: —</b> SOL moved in or out of the vault wallet outside the chest (trades not signed by the server), so this chest's books were fitted to the wallet and a result for this coin alone isn't reliable. The wallet total on My launches is the real number.</div>
       : <div className="row" style={{ marginTop: 8 }}><span>Result so far</span><span className="sp" /><b className={'num ' + (res >= 0 ? 'up' : 'dn')} style={{ fontSize: 18 }}>{res >= 0 ? '+' : ''}{S(res, 3)} SOL</b></div>}
     {!r.fitted && <div className="nm">holds now − put in · coins valued at today's price (selling all of them at once would get less)</div>}
-    <div className="row" style={{ marginTop: 8 }}><span className="sp" /><button className="btn sm" onClick={copy}>{copied ? 'Copied ✓' : 'Copy summary'}</button></div>
+    <div className="row" style={{ marginTop: 8 }}><a className="nm" href="#/receipts" style={{ textDecoration: 'underline' }}>all launch receipts</a><span className="sp" /><button className="btn sm" onClick={copy}>{copied ? 'Copied ✓' : 'Copy summary'}</button></div>
   </div>
 }
 

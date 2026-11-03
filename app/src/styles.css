@@ -487,3 +487,7 @@ tbody tr{transition:background .12s,transform .12s}tbody tr:hover{transform:tran
 /* launch report (creator) */
 .lr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:10px}
 .lr-grid .l{font-size:11px;color:var(--fg3);letter-spacing:.02em}.lr-grid .v{font-size:16px;font-weight:600;margin-top:2px}.lr-grid .s{font-size:11px;color:var(--fg2);margin-top:2px;line-height:1.35}
+/* launch receipts */
+.rc{display:flex;flex-direction:column;gap:12px}.rc-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
+@media(max-width:760px){.rc-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.rc-table{overflow-x:auto}.rc-table table{min-width:720px}.rc-table td a{color:var(--fg2);text-decoration:underline;text-underline-offset:2px}

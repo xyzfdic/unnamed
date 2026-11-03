@@ -14,6 +14,7 @@ import * as V from './vault.ts'
 import * as INV from './invite.ts'
 import * as EV from './events.ts'
 import * as AL from './alert.ts'
+import * as MV from './move.ts'
 import * as MP from './mintpool.ts'
 import { TREASURY, RPC } from './chain.ts'
 import * as R from './rules.ts'
@@ -22,7 +23,7 @@ import { streamStats } from './stream.ts'
 
 const PORT = +(process.env.PORT || 8787)
 const json = (res: any, code: number, body: any) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-banker-session', 'access-control-allow-methods': 'GET,POST,OPTIONS' }); res.end(JSON.stringify(body)) }
-const readBody = (req: any) => new Promise<any>((ok, no) => { let s = ''; req.on('data', (c: any) => { s += c; if (s.length > 2_500_000) { no(new Error('body too large')); req.destroy() } }); req.on('end', () => { try { ok(JSON.parse(s || '{}')) } catch { ok({}) } }) })
+const readBody = (req: any, max = 2_500_000) => new Promise<any>((ok, no) => { let s = ''; req.on('data', (c: any) => { s += c; if (s.length > max) { no(new Error('body too large')); req.destroy() } }); req.on('end', () => { try { ok(JSON.parse(s || '{}')) } catch { ok({}) } }) })
 // per-IP token bucket: 300 reads / 60 writes per 10s — a phone polls ~1 req/s, carrier NAT shares one IP across many phones
 const buckets = new Map<string, { t: number; n: number }>()
 function limited(ip: string, write: boolean) { const now = Date.now(); const k = ip + (write ? 'w' : 'r'); const b = buckets.get(k) || { t: now, n: 0 }; if (now - b.t > 10_000) { b.t = now; b.n = 0 } b.n++; buckets.set(k, b); return b.n > (write ? 60 : 300) }
@@ -36,6 +37,8 @@ const server = createServer(async (req, res) => {
     // private beta gate: every write route needs a session from a redeemed invite key (GATE=1). Reads stay open so the terminal is visible without one.
     const sessionWallet = INV.session(String(req.headers['x-banker-session'] || u.searchParams.get('session') || '')); (req as any).sessionWallet = sessionWallet
     const isAdmin = p.startsWith('/admin/') && !!process.env.ADMIN_KEY && u.searchParams.get('key') === process.env.ADMIN_KEY
+    // STANDBY=1 (move day): reads only — every write is refused, so nothing changes between the export and the new server taking over
+    if (MV.STANDBY() && req.method === 'POST' && p !== '/admin/import') { return json(res, 503, { error: 'BANKER is moving servers — back in a few minutes, nothing was sent', standby: true }) }
     if (INV.GATE && req.method === 'POST' && !isAdmin && !['/invite/redeem', '/invite/session', '/waitlist', '/ipfs'].includes(p) && !sessionWallet) return json(res, 401, { error: 'invite key required', gate: true })
   if (req.method === 'OPTIONS') return json(res, 204, {})
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim()
@@ -43,7 +46,9 @@ const server = createServer(async (req, res) => {
   try {
     // pubkey-shaped path params only
     for (const seg of [p.startsWith('/book/') && p.slice(6), p.startsWith('/vault/mint/') && p.slice(12), p.startsWith('/family/') && p.slice(8), p.startsWith('/vamp/') && p.slice(6), p.startsWith('/dev/') && p.slice(5), p.startsWith('/import/quote/') && p.slice(14)]) if (seg && !isPk(seg)) throw new Error('bad address')
-    if (p === '/health') return json(res, 200, { ok: true, vaultWallet: V.sharedPub() || undefined, alerts: AL.enabled() ? (AL.chat() ? 'paired' : 'waiting for /start') : 'off', commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 8) || undefined, gate: INV.GATE, invites: INV.stats(), rpc: RPC.replace(/api-key=.*/, 'api-key=…'), treasury: TREASURY, desk: D.stats(), vaults: V.list().length, vaultWallet: V.sharedPub(), mints: MP.stats(), stream: streamStats(), curve: LL.curveInfo(), beta: { deskOnly: DESK_ONLY, paper: V.PAPER, importFeeSol: R.IMPORT_FEE_SOL, importSeedSol: R.IMPORT_SEED_SOL, keeper: KEEP.status(), feeBps: R.CROSS_FEE_BPS, profitOnly: process.env.PROFIT_ONLY === '1', testReclaim: process.env.TEST_RECLAIM === '1', mmBuys: process.env.MM_BUYS !== '0' || process.env.MM_ON === '1', deskBid: process.env.DESK_BID !== '0', maxChestSol: V.MAX_CHEST_SOL, pumpStream: !!process.env.PUMPPORTAL_KEY, ipfs: process.env.PINATA_JWT ? 'pinata' : 'self-hosted', landing: process.env.JITO === '1' ? 'jito' : C.FAST ? 'sender' : 'rpc', lastRoute: C.lastRoute } })
+    if (p === '/admin/export' && req.method === 'GET') { if (!process.env.ADMIN_KEY || u.searchParams.get('key') !== process.env.ADMIN_KEY) return json(res, 403, { error: 'admin key' }); return json(res, 200, MV.exportData(u.searchParams.get('all') === '1', V.sharedPub())) }
+    if (p === '/admin/import' && req.method === 'POST') { if (!process.env.ADMIN_KEY || u.searchParams.get('key') !== process.env.ADMIN_KEY) return json(res, 403, { error: 'admin key' }); const b = await readBody(req, 80_000_000); return json(res, 200, MV.importData(b, V.sharedPub(), u.searchParams.get('force') === '1')) }
+    if (p === '/health') return json(res, 200, { ok: true, standby: MV.STANDBY() || undefined, vaultWallet: V.sharedPub() || undefined, alerts: AL.enabled() ? (AL.chat() ? 'paired' : 'waiting for /start') : 'off', commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 8) || undefined, gate: INV.GATE, invites: INV.stats(), rpc: RPC.replace(/api-key=.*/, 'api-key=…'), treasury: TREASURY, desk: D.stats(), vaults: V.list().length, vaultWallet: V.sharedPub(), mints: MP.stats(), stream: streamStats(), curve: LL.curveInfo(), beta: { deskOnly: DESK_ONLY, paper: V.PAPER, importFeeSol: R.IMPORT_FEE_SOL, importSeedSol: R.IMPORT_SEED_SOL, keeper: KEEP.status(), feeBps: R.CROSS_FEE_BPS, profitOnly: process.env.PROFIT_ONLY === '1', testReclaim: process.env.TEST_RECLAIM === '1', mmBuys: process.env.MM_BUYS !== '0' || process.env.MM_ON === '1', deskBid: process.env.DESK_BID !== '0', maxChestSol: V.MAX_CHEST_SOL, pumpStream: !!process.env.PUMPPORTAL_KEY, ipfs: process.env.PINATA_JWT ? 'pinata' : 'self-hosted', landing: process.env.JITO === '1' ? 'jito' : C.FAST ? 'sender' : 'rpc', lastRoute: C.lastRoute } })
     if (p === '/ask/quote' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await D.askQuote(b.askId, b.buyer, b.sol ? +b.sol : undefined)) }
     if (p === '/ask/fill' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, await D.askFill(b.askId, b.buyer, b.tx, b.sol ? +b.sol : undefined)) }
     if (p === '/myasks') { const me = u.searchParams.get('me') || ''; if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(me)) return json(res, 400, { error: 'me' }); return json(res, 200, D.myAsks(me)) }
@@ -91,6 +96,7 @@ const server = createServer(async (req, res) => {
     if (p.startsWith('/candles/')) { const mint = p.slice(9).replace(/[^1-9A-HJ-NP-Za-km-z]/g, ''); const tf = Math.max(5, Math.min(3600, +(u.searchParams.get('tf') || 60))); return json(res, 200, V.candles(mint, tf, Math.min(2000, +(u.searchParams.get('limit') || 300)))) }
     if (p.startsWith('/tape/')) { const f = (process.env.DATA_DIR || './data') + '/tape/' + p.slice(6).replace(/[^1-9A-HJ-NP-Za-km-z]/g, '') + '.jsonl'; if (!existsSync(f)) return json(res, 404, { error: 'no tape' }); res.writeHead(200, { 'content-type': 'application/x-ndjson', 'access-control-allow-origin': '*' }); return createReadStream(f).pipe(res) }
     if (p.startsWith('/vault/mint/')) return json(res, 200, V.byMint(p.slice(12)))
+    if (p === '/receipts' && req.method === 'GET') return json(res, 200, V.receipts())
     // before the /vault/:id read below, which would take 'withdraw-preview' for an id
     if (p === '/vault/withdraw-preview' && req.method === 'GET') return json(res, 200, await V.withdrawPreview(String(u.searchParams.get('id') || '')))
     if (p.startsWith('/vault/') && req.method === 'GET') return json(res, 200, V.get(p.slice(7)))
@@ -161,20 +167,32 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('close', () => D.dropSocket(ws))
 })
 setInterval(D.sweep, 10000); setInterval(D.rfqSweep, 5000)
-D.setVaultResponder(V.respondRfq)
+if (!MV.STANDBY()) D.setVaultResponder(V.respondRfq)
 // DESK_ONLY=1: ephemeral/public-tunnel deployments — the desk is non-custodial so it is safe to run anywhere; vaults (server-held keys) stay off.
 export const DESK_ONLY = process.env.DESK_ONLY === '1'
-if (!DESK_ONLY) { V.load(); V.startStream(); setInterval(() => V.tick().catch(() => {}), 5000); setInterval(() => V.crowdSweep().catch(() => {}), 60000); setInterval(() => V.autoArm().catch(() => {}), 15000); setInterval(() => V.trackTick().catch(() => {}), 4000); const ep = () => LL.ensurePlatform().catch((e) => console.log('platform setup: ' + String(e.message).slice(0, 120))); setTimeout(ep, 8000); setInterval(ep, 60000) }
+if (!DESK_ONLY && MV.STANDBY()) { V.load(); console.log('STANDBY: reads only — no ticks, stream, claims or signing; writes refused') }
+else if (!DESK_ONLY) { V.load(); V.startStream(); setInterval(() => V.tick().catch(() => {}), 5000); setInterval(() => V.crowdSweep().catch(() => {}), 60000); setInterval(() => V.autoArm().catch(() => {}), 15000); setInterval(() => V.trackTick().catch(() => {}), 4000); const ep = () => LL.ensurePlatform().catch((e) => console.log('platform setup: ' + String(e.message).slice(0, 120))); setTimeout(ep, 8000); setInterval(ep, 60000) }
 else console.log('desk-only mode: vault/import routes disabled')
-if (process.env.VAMPS !== '0') VM.start()
+if (process.env.VAMPS !== '0' && !MV.STANDBY()) VM.start()
 server.listen(PORT, () => console.log(`banker server on :${PORT} · treasury ${TREASURY}`))
 // Telegram alerts (TELEGRAM_BOT_TOKEN in the Render env): /status answers with the vault wallet's split and every live chest
-if (!DESK_ONLY && AL.enabled()) {
+if (!DESK_ONLY && !MV.STANDBY() && AL.enabled()) {
   AL.setStatus(async () => {
     const a = await V.sharedAudit().catch(() => null); const live = V.list()
     const head = a ? `<b>vault wallet</b> ${a.balanceSol.toFixed(4)} SOL · booked to chests ${a.ledgersSol.toFixed(4)} · in no chest ${a.unattributedSol.toFixed(4)}` : 'vault wallet: unreadable right now'
     const rows = live.slice(0, 15).map((v) => `${AL.esc(v.symbol || v.id)} · chest ${v.chest.toFixed(3)} SOL · ${Math.round(v.tokens).toLocaleString('en-US')} coins · sold ${(v.score?.captured || 0).toFixed(2)} SOL into buys`)
     return [head, `${live.length} live chest(s)`, ...rows].join('\n')
   })
+  AL.setDaily(async () => dailySummary())
   AL.start().catch(() => {})
+}
+/** the evening Telegram summary: the last 24 h of every chest, from its activity (real tx deltas), plus the vault wallet's split */
+export async function dailySummary(now = Date.now()) {
+  const since = now - 24 * 3.6e6; const m = V.movesSince(since); const a = await V.sharedAudit().catch(() => null)
+  const errs = EV.since(since).filter((e) => e.kind === 'error').length
+  const lines = [`<b>BANKER · last 24 h</b>`, `${m.launched.length} launch${m.launched.length === 1 ? '' : 'es'} · chests sold ${m.sold.toFixed(3)} SOL into ${m.sales} buy${m.sales === 1 ? '' : 's'} · fees in ${m.fees.toFixed(3)} SOL`]
+  for (const v of m.launched.slice(0, 8)) lines.push(`• ${AL.esc(v.symbol)} (${v.venue === 'pump' ? 'pump.fun' : 'launchpad'})${v.sniper ? ` · snipers ${v.sniper.buySol.toFixed(2)} SOL from ${v.sniper.wallets} wallets · chest sold ${v.sniper.soldInto.toFixed(2)} into them` : ''}`)
+  if (a) lines.push(`vault wallet ${a.balanceSol.toFixed(3)} SOL · booked to chests ${a.ledgersSol.toFixed(3)} · in no chest ${a.unattributedSol.toFixed(3)}`)
+  lines.push(errs ? `${errs} error${errs === 1 ? '' : 's'} logged (alerts above, /admin/events for all)` : 'no errors')
+  return lines.join('\n')
 }
