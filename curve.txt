@@ -1,0 +1,13 @@
+12:42:06 vault platform fees claimed 0.0096 SOL → 1 chest(s) 0.0096 SOL {"sig":"fqu6WmmD3bpnT1HP6EdJVS4tULhfxqMFKQdpBGUPu8dRxpponWBf5GStxWyv1bnkFJLrgcpTUqAQHAimbBGNzqk"}
+13:09:28 vault platform fees claimed 0.0225 SOL → 1 chest(s) 0.0225 SOL {"sig":"5AX4wGL5ne87tVBNwFN2pCWiFxVRxR1Rs6MknEsTS3uaJSoDj89hRYQj1r8tYUuXfxMba9ZVPKuoifGEbEdqWDJs"}
+13:19:58 vault launch bundle 45be5c6103… sent (2 txs) {"bundleId":"45be5c610357a510b8244a71178f92054230528d2be92af5f3bcb68a94775a5c","sim":null}
+13:20:08 vault launch bundle 45be5c6103… not known to the region that took it (another region may have landed it) (10 s after sending) {"bundleId":"45be5c610357a510b8244a71178f92054230528d2be92af5f3bcb68a94775a5c","st":{"status":"Invalid"}}
+13:20:18 vault launch bundle 45be5c6103… sent (2 txs) {"bundleId":"45be5c610357a510b8244a71178f92054230528d2be92af5f3bcb68a94775a5c","sim":null}
+13:20:29 vault launch bundle 45be5c6103… not known to the region that took it (another region may have landed it) (10 s after sending) {"bundleId":"45be5c610357a510b8244a71178f92054230528d2be92af5f3bcb68a94775a5c","st":{"status":"Invalid"}}
+13:20:38 vault launch bundle 45be5c6103… not known to the region that took it (another region may have landed it) (40 s after sending) {"bundleId":"45be5c610357a510b8244a71178f92054230528d2be92af5f3bcb68a94775a5c","st":{"status":"Invalid"}}
+13:20:59 vault launch bundle 45be5c6103… not known to the region that took it (another region may have landed it) (40 s after sending) {"bundleId":"45be5c610357a510b8244a71178f92054230528d2be92af5f3bcb68a94775a5c","st":{"status":"Invalid"}}
+VAULT ZDwWk32q launchlab stake 6.165 buy 5.165 armed true mint nUCiRZJQ
+   13:09:28 tax tax → chest
+   12:42:06 tax tax → chest
+VAULT 7ZN6fMow launchlab stake 8.339 buy 7.289 armed false mint XDAZc5BD
+   13:19:53 note signed block-zero buy · 7.289 SOL for 200.00M tokens (launchlab) · stake 8.339 SOL inside the create
