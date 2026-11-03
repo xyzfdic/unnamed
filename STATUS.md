@@ -16,6 +16,16 @@
 - Live: server on Render (`unnamed-server.onrender.com`, helius, gate on, 2 SOL chest cap, 1 SOL import tier), app at `app.banker.cash`, landing at `banker.cash`. One brand wallet `BANKY…` is every vault (top holder on every coin) with per-vault chest ledgers booked from tx deltas; launched mints end in `…BANK` from a pre-ground pool; launch metadata self-hosted. Drawdown stop on the mm leg. Paper vault runs on CI against live coins (`paper.yml`).
 - Tests: server 35/35, app 20/20, e2e launch 21 (+21 in shared-wallet mode) · gate 15 · desk 50 · app 22 · import 16 · mm 10; mainnet: platform config created, platform fee claim (1.16 SOL) landed, a holder sell simulates clean. See POSTMORTEM.md for the first live launch.
 
+## Handoff (2026-11-03 early) — launch from Telegram, waitlist breakdown
+- **/launch in Telegram** (src/tgbot.ts, paired chat only): name → ticker → image (photo or file, ≤5 MB, fetched via getFile) → venue →
+  socials → chest buy % (launchpad also "fees fill it") → chest SOL → own buy → a draft in DATA_DIR/tgdrafts (2 h) and a button that opens
+  `app.banker.cash/#/launch/<id>` inside Phantom (phantom.app/ul/browse). The app reads `GET /tg/draft/<id>` and opens the form filled in;
+  the person signs once in Phantom. The bot never signs or holds a key. Also /receipts, /report T, /pause T [min] + /resume T (confirm
+  button; `ownerPause` — never lifts a foreign-trade pause), /withdraw T (preview + link). Help lists them.
+- **Waitlist**: 1,027 (693 site + 334 offsite) on Nov 2. On-chain check: 209 real wallets (137 active, 72 real), 57 light, 427 never
+  used (406 of them from Nov 2's waves). Dashboard artifact "BANKER waitlist" (aggregates only) + ranked CSV sent to the owner. New
+  signups now store the browser's language tag and the origin site (+ tz/utm/ref if the banker.cash form sends them). No IPs stored.
+
 ## Handoff (2026-11-02 night) — receipts, evening summary, move-day tooling
 - **Launch receipts** (`GET /receipts`, app `#/receipts`, in More): every launch with a chest — snipers' first minute (from chain), sold
   into snipers, sold into buys, fees in — with solscan links for the coin and the vault wallet. Totals on top + Post on X. No per-coin

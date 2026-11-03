@@ -15,14 +15,19 @@ const persist = () => { try { mkdirSync(process.env.DATA_DIR || './data', { recu
 export const enabled = () => !!TOKEN()
 export const chat = () => process.env.TELEGRAM_CHAT_ID || st.chat || null
 export const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-export const links = (mint: string, venue?: string) => [`<a href="https://dexscreener.com/solana/${mint}">dex</a>`, venue === 'pump' ? `<a href="https://pump.fun/coin/${mint}">pump</a>` : '', `<a href="https://solscan.io/token/${mint}">solscan</a>`, `<a href="https://app.banker.cash/#coin/${mint}">banker</a>`].filter(Boolean).join(' · ')
+export const links = (mint: string, venue?: string) => [`<a href="https://dexscreener.com/solana/${mint}">dex</a>`, venue === 'pump' ? `<a href="https://pump.fun/coin/${mint}">pump</a>` : '', `<a href="https://solscan.io/token/${mint}">solscan</a>`, `<a href="https://app.banker.cash/#/coin/${mint}">banker</a>`].filter(Boolean).join(' · ')
 
 const q: string[] = []; let flushT: any = null; let sending = false; const recent = new Map<string, number>()
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-async function call(method: string, body: any, timeoutMs = 15_000): Promise<any> {
+export async function call(method: string, body: any, timeoutMs = 15_000): Promise<any> {
   const r = await fetch(api(method), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
   const j: any = await r.json().catch(() => null); if (!r.ok || !j?.ok) { const e: any = new Error(`telegram ${method}: ${r.status} ${j?.description || ''}`.trim()); e.status = r.status; e.retryAfter = j?.parameters?.retry_after; throw e }
   return j.result
+}
+/** a file the bot received (photo), by its file_path from getFile — the download URL carries the token, so it never leaves the server */
+export async function download(filePath: string, maxBytes = 5_000_000): Promise<Buffer> {
+  const r = await fetch(`https://api.telegram.org/file/bot${TOKEN()}/${filePath}`, { signal: AbortSignal.timeout(30_000) }); if (!r.ok) throw new Error('telegram file: ' + r.status)
+  const b = Buffer.from(await r.arrayBuffer()); if (b.length > maxBytes) throw new Error('image too big'); return b
 }
 /** queue one alert. `key` + `everyMs`: the same key is sent at most once per window (errors). Text is HTML (escape what you interpolate). */
 export function send(text: string, key?: string, everyMs = 0) {
@@ -64,17 +69,23 @@ export function route(e: EV.Ev) {
 // ---- /start pairing + /status ----
 let statusFn: (() => Promise<string>) | null = null
 export const setStatus = (f: () => Promise<string>) => { statusFn = f }
-const HELP = 'BANKER alerts. /status — vault wallet and chests · /help — this'
+// the bot's other commands, button taps and photos (tgbot.ts) — only ever for the paired chat
+let botFn: ((u: any) => Promise<void>) | null = null; let botHelp = ''
+export const setBot = (f: (u: any) => Promise<void>, help: string) => { botFn = f; botHelp = help }
+const help = () => `BANKER.\n${botHelp ? botHelp + '\n' : ''}/status — vault wallet and chests\n/help — this`
 export async function handle(u: any) {
-  const m = u?.message; const id = m?.chat?.id; const text = String(m?.text || '').trim(); if (id == null || !text.startsWith('/')) return
-  const cmd = text.split(/[\s@]/)[0].toLowerCase(); const mine = chat() != null && String(chat()) === String(id)
+  const cq = u?.callback_query; const m = u?.message || cq?.message; const id = m?.chat?.id; const text = cq ? '' : String(m?.text || m?.caption || '').trim(); if (id == null) return
+  const mine = chat() != null && String(chat()) === String(id)
+  if (cq || !text.startsWith('/')) { if (mine && botFn) await botFn(u); else if (cq) await call('answerCallbackQuery', { callback_query_id: cq.id }).catch(() => {}); return }
+  const cmd = text.split(/[\s@]/)[0].toLowerCase()
   if (cmd === '/start') {
-    if (chat() == null) { st.chat = id; persist(); await call('sendMessage', { chat_id: id, text: `paired ✓ — BANKER alerts come here now (launches, sniper reports, big sales, pauses, errors).\n${HELP}` }).catch(() => {}); EV.log('vault', `telegram alerts paired with chat ${String(id).slice(0, 4)}…`); flush().catch(() => {}); return }
-    await call('sendMessage', { chat_id: id, text: mine ? `already paired. ${HELP}` : 'this bot is private.' }).catch(() => {}); return
+    if (chat() == null) { st.chat = id; persist(); await call('sendMessage', { chat_id: id, text: `paired ✓ — BANKER alerts come here now (launches, sniper reports, big sales, pauses, errors).\n${help()}` }).catch(() => {}); EV.log('vault', `telegram alerts paired with chat ${String(id).slice(0, 4)}…`); flush().catch(() => {}); return }
+    await call('sendMessage', { chat_id: id, text: mine ? `already paired.\n${help()}` : 'this bot is private.' }).catch(() => {}); return
   }
   if (!mine) return
   if (cmd === '/status') { let s = 'status unavailable'; try { if (statusFn) s = await statusFn() } catch (e: any) { s = 'status failed: ' + esc(String(e?.message || e).slice(0, 120)) } await call('sendMessage', { chat_id: id, text: s, parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {}); return }
-  if (cmd === '/help') await call('sendMessage', { chat_id: id, text: HELP }).catch(() => {})
+  if (cmd === '/help') { await call('sendMessage', { chat_id: id, text: help() }).catch(() => {}); return }
+  if (botFn) await botFn(u)
 }
 // ---- the evening summary: once a day at TELEGRAM_DAILY_HOUR (21) in TELEGRAM_TZ (America/Chicago); the day it went out is kept ----
 let dailyFn: (() => Promise<string>) | null = null
@@ -95,7 +106,7 @@ export async function start() {
   setInterval(() => { dailyTick().catch(() => {}) }, 5 * 60_000)
   for (;;) {
     try {
-      const ups: any[] = await call('getUpdates', { offset: st.offset || 0, timeout: 50, allowed_updates: ['message'] }, 65_000)
+      const ups: any[] = await call('getUpdates', { offset: st.offset || 0, timeout: 50, allowed_updates: ['message', 'callback_query'] }, 65_000)
       for (const u of ups) { st.offset = u.update_id + 1; persist(); await handle(u).catch(() => {}) }
       if (q.length && chat() && !flushT && !sending) flush().catch(() => {})
     } catch (e: any) { await sleep(e?.status === 409 ? 15_000 : e?.status === 401 || e?.status === 404 ? 600_000 : 5_000) }   // 401/404: bad token — check again in 10 min

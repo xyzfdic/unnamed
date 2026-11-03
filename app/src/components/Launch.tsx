@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { solForPct } from '../lib/protocol'
 import { S } from '../lib/fmt'
 import type { CreateMeta } from '../lib/pumpportal'
+import type { TgDraft } from '../lib/desk'
 import * as D from '../lib/dex'
 import { ModePicker } from './Desk'
 
@@ -9,7 +10,7 @@ const short4 = (a: string) => a.slice(0, 4) + '…' + a.slice(-4)
 /** '@handle', 'x.com/handle', 'site.com' or a full link → a full https link */
 const link = (v: string, base: string) => { v = v.trim(); if (!v) return ''; if (/^https?:\/\//i.test(v)) return v; if (v.startsWith('@')) return base + v.slice(1); if (/\./.test(v)) return 'https://' + v.replace(/^\/+/, ''); return base + v }
 export type Venue = 'launchlab' | 'pump'
-type Props = { wallet?: string; walletKind?: 'in-app' | 'phantom' | 'wallet'; onClose: () => void; onLaunch: (m: CreateMeta, devBuy: number, stake: number, copyOf?: string, mode?: 'floor' | 'mm', ceiling?: number, venue?: Venue, permTax?: boolean, vaultBuy?: number, targetPct?: number) => void; taxBps?: number; permTaxBps?: number; platformReady?: boolean; vaultWallet?: string; busy: string; connected: boolean; sol: number | null; needWallet: () => void }
+type Props = { wallet?: string; walletKind?: 'in-app' | 'phantom' | 'wallet'; onClose: () => void; onLaunch: (m: CreateMeta, devBuy: number, stake: number, copyOf?: string, mode?: 'floor' | 'mm', ceiling?: number, venue?: Venue, permTax?: boolean, vaultBuy?: number, targetPct?: number) => void; taxBps?: number; permTaxBps?: number; platformReady?: boolean; vaultWallet?: string; draft?: TgDraft | null; busy: string; connected: boolean; sol: number | null; needWallet: () => void }
 /** where a launch is, from the status line the launch flow reports: chest → upload → build → sign → land. The modal closes once the coin is live. */
 const STEPS: [string, RegExp][] = [['Chest', /creating vault|funding vault/i], ['Upload', /uploading/i], ['Build', /building/i], ['Sign', /^sign|approve/i], ['Land', /sending|resending|landing|confirming|checking|rebuilding|dropped|took too long/i]]
 function Progress({ busy }: { busy: string }) {
@@ -21,11 +22,14 @@ function Progress({ busy }: { busy: string }) {
     <div className="lp-msg"><span>{busy}</span><span className="num">{secs}s</span></div>
   </div>
 }
+/** the image a Telegram draft carries, as the File the launch uploads */
+const draftFile = (d?: TgDraft | null) => { if (!d?.image?.b64) return undefined; try { const bin = atob(d.image.b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new File([u], 'image.' + (d.image.mime.split('/')[1] || 'png'), { type: d.image.mime }) } catch { return undefined } }
 export default function Launch(p: Props) {
-  const [name, setName] = useState(''); const [symbol, setSymbol] = useState(''); const [desc, setDesc] = useState(''); const [file, setFile] = useState<File | undefined>()
-  const [tw, setTw] = useState(''); const [tg, setTg] = useState(''); const [web, setWeb] = useState('')
-  const [dev, setDev] = useState(0.5); const [pct, setPct] = useState(10); const [buyNow, setBuyNow] = useState(true); const [chest, setChest] = useState(0.5); const [mode, setMode] = useState<'floor' | 'mm'>('mm'); const [ceiling, setCeiling] = useState(0.3); const [adv, setAdv] = useState(false)
-  const [cq, setCq] = useState(''); const [cres, setCres] = useState<D.Coin[]>([]); const [copyOf, setCopyOf] = useState<D.Coin | null>(null); const [venue, setVenueRaw] = useState<Venue>(() => { try { const v = localStorage.getItem('launch.venue'); return v === 'pump' || v === 'launchlab' ? v : 'launchlab' } catch { return 'launchlab' } }); const setVenue = (v: Venue) => { setVenueRaw(v); try { localStorage.setItem('launch.venue', v) } catch {} }; const [permTax, setPermTax] = useState(false)
+  const d = p.draft
+  const [name, setName] = useState(d?.name || ''); const [symbol, setSymbol] = useState(d?.symbol || ''); const [desc, setDesc] = useState(''); const [file, setFile] = useState<File | undefined>(() => draftFile(d))
+  const [tw, setTw] = useState(d?.twitter || ''); const [tg, setTg] = useState(d?.telegram || ''); const [web, setWeb] = useState(d?.website || '')
+  const [dev, setDev] = useState(d?.dev ?? 0.5); const [pct, setPct] = useState(d?.pct ?? 10); const [buyNow, setBuyNow] = useState(d?.buyNow ?? true); const [chest, setChest] = useState(d?.chest ?? 0.5); const [mode, setMode] = useState<'floor' | 'mm'>('mm'); const [ceiling, setCeiling] = useState(0.3); const [adv, setAdv] = useState(false)
+  const [cq, setCq] = useState(''); const [cres, setCres] = useState<D.Coin[]>([]); const [copyOf, setCopyOf] = useState<D.Coin | null>(null); const [venue, setVenueRaw] = useState<Venue>(() => { if (d?.venue) return d.venue; try { const v = localStorage.getItem('launch.venue'); return v === 'pump' || v === 'launchlab' ? v : 'launchlab' } catch { return 'launchlab' } }); const setVenue = (v: Venue) => { setVenueRaw(v); try { localStorage.setItem('launch.venue', v) } catch {} }; const [permTax, setPermTax] = useState(false)
   React.useEffect(() => { if (!cq.trim() || copyOf) { setCres([]); return } const t = setTimeout(() => D.search(cq).then((r) => setCres(r.slice(0, 5))).catch(() => {}), 300); return () => clearTimeout(t) }, [cq, copyOf])
   const ok = name.trim().length > 1 && symbol.trim().length > 0 && symbol.length <= 10 && !!file
   const feeOff = venue === 'launchlab' ? 25 + (p.taxBps ?? 200) : 0
@@ -35,6 +39,7 @@ export default function Launch(p: Props) {
   const isVaultWallet = !!p.wallet && !!p.vaultWallet && p.wallet === p.vaultWallet
   return <div className="modal" onClick={p.onClose}><div className="box" onClick={(e) => e.stopPropagation()}>
     <div className="row"><h2>Launch a coin</h2><span className="sp" /><span className="tag live">{venue === 'launchlab' ? `BANKER launchpad · ${((p.taxBps ?? 200) / 100).toFixed(1)}% of trades → chest` : 'on pump.fun'}</span></div>
+    {d && <div className="note" style={{ fontSize: 12.5 }}>Filled in from Telegram. Check it, then press Launch — your wallet asks you to approve once.</div>}
     <div className="lbl" style={{ marginBottom: -4 }}>Where it launches</div>
     <div className="venue" role="radiogroup" aria-label="Where it launches">
       <button role="radio" aria-checked={venue === 'launchlab'} className={venue === 'launchlab' ? 'on' : ''} onClick={() => setVenue('launchlab')}><b>{venue === 'launchlab' ? '● ' : '○ '}BANKER launchpad</b><span>{p.platformReady === false ? `setup not finished (see Settings) — you can launch, the ${((p.taxBps ?? 200) / 100).toFixed(1)}% fee starts once it is` : `runs on Raydium LaunchLab — NOT on pump.fun · ${((p.taxBps ?? 200) / 100).toFixed(1)}% of every trade goes into the coin's chest`}</span></button>
@@ -45,7 +50,7 @@ export default function Launch(p: Props) {
       <div className="fld"><div className="lbl">Name</div><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Glass Frog" maxLength={32} /></div>
       <div className="fld"><div className="lbl">Ticker</div><input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} placeholder="GLASS" maxLength={10} /></div>
     </div>
-    <div className="fld"><div className="lbl">Image</div><input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0])} /></div>
+    <div className="fld"><div className="lbl">Image{file && d?.image ? ' · from Telegram' : ''}</div>{file && d?.image && <img src={`data:${d.image.mime};base64,${d.image.b64}`} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover' }} />}<input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0])} /></div>
     <div className="two">
       <div className="fld"><div className="lbl">X / Twitter</div><input value={tw} onChange={(e) => setTw(e.target.value)} placeholder="@handle or x.com link" /></div>
       <div className="fld"><div className="lbl">Website</div><input value={web} onChange={(e) => setWeb(e.target.value)} placeholder="yoursite.com" /></div>
@@ -66,7 +71,7 @@ export default function Launch(p: Props) {
       {venue === 'launchlab' && <div className="seg" style={{ marginTop: 8 }}><button className={!buyNow ? 'on' : ''} onClick={() => setBuyNow(false)}>Fees fill it · free</button><button className={buyNow ? 'on' : ''} onClick={() => setBuyNow(true)}>Buy at launch · {S(solForPct(pct, dev, feeOff), 1)} SOL</button></div>}
       <div className="row" style={{ marginTop: 8 }}><b>Chest</b><span className="sp" /><b className="num">{S(chest, 2)} SOL</b></div>
       <input type="range" className="slider" min={0.05} max={10} step={0.05} value={chest} onChange={(e) => setChest(+e.target.value)} style={{ marginTop: 6 }} />
-      <div className="nm" style={{ marginTop: 6 }}>{taxFunded ? `Every trade pays ${((p.taxBps ?? 200) / 100).toFixed(0)}% into the chest. The chest buys coins when they're cheap until it holds ${pct}% of them, then buys dips and takes profit on pumps.` : `The chest buys ${pct}% of the coins the moment it launches and keeps its SOL for dips. Every trade adds ${((p.taxBps ?? 200) / 100).toFixed(0)}% to the chest.`} You earn {pct}% of the chest's profit (you can give this up later).</div>
+      <div className="nm" style={{ marginTop: 6 }}>{taxFunded ? `Every trade pays ${((p.taxBps ?? 200) / 100).toFixed(0)}% into the chest. The chest buys coins when they're cheap until it holds ${pct}% of them, then buys dips and takes profit on pumps.` : `The chest buys ${pct}% of the coins the moment it launches and keeps its SOL for dips. ${venue === 'launchlab' ? `Every trade adds ${((p.taxBps ?? 200) / 100).toFixed(0)}% to the chest.` : 'On pump.fun there is no trading fee: the chest grows from its sales into buys.'}`} You earn {pct}% of the chest's profit (you can give this up later).</div>
       {adv && <div style={{ marginTop: 8 }}><ModePicker mode={mode} ceiling={ceiling} onChange={(m, c) => { setMode(m); setCeiling(c) }} compact /></div>}{!adv && <div className="nm">Market maker · capture ceiling {Math.round(ceiling * 100)}%</div>}</div>
     <div className="kv"><span>Total to launch</span><b className="num">{S(total, 2)} SOL</b></div>
     <div className="nm">your buy {S(dev, 2)}{vaultBuy ? ` + chest's buy ${S(vaultBuy, 2)}` : ''} + chest {S(chest, 2)} + {venue === 'launchlab' ? '0.1 network setup' : '0.02 network fees'}</div>

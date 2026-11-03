@@ -15,6 +15,7 @@ import * as INV from './invite.ts'
 import * as EV from './events.ts'
 import * as AL from './alert.ts'
 import * as MV from './move.ts'
+import * as TG from './tgbot.ts'
 import * as MP from './mintpool.ts'
 import { TREASURY, RPC } from './chain.ts'
 import * as R from './rules.ts'
@@ -31,6 +32,15 @@ setInterval(() => { const now = Date.now(); for (const [k, b] of buckets) if (no
 const isPk = (x: any) => typeof x === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(x)
 
 const wlSet = new Set<string>(); const wlIp = new Map<string, number[]>()
+/** coarse, non-identifying context for a waitlist signup: the browser's language/region tag (Accept-Language, e.g. en-US, pt-BR), the
+ *  site it came from (Origin/Referer host), and — when the signup page sends them — its time zone, utm source/campaign and referrer.
+ *  No IP is stored. */
+function wlMeta(req: any, b: any) {
+  const lang = String(req.headers['accept-language'] || '').split(',')[0].trim().slice(0, 16) || undefined
+  let from: string | undefined; try { from = new URL(String(req.headers['origin'] || req.headers['referer'] || '')).host.slice(0, 64) || undefined } catch {}
+  const clip = (x: any, n = 64) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : undefined)
+  return { lang, from, tz: clip(b?.tz, 48), utm: clip(b?.utm_source || b?.utm, 48), camp: clip(b?.utm_campaign, 48), ref: clip(b?.ref || b?.referrer, 96) }
+}
 const WL_OFF = Math.max(0, Math.floor(+(process.env.WAITLIST_OFFSITE ?? 334))) // sign-ups from other platforms (334 + 8 here = 342 on Oct 29); override in the Render env
 const server = createServer(async (req, res) => {
   const u = new URL(req.url!, 'http://x'); const p = u.pathname; IPFS.learnBase(req as any)
@@ -90,13 +100,14 @@ const server = createServer(async (req, res) => {
       if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet)) return json(res, 400, { error: 'that is not a Solana address' })
       const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0]; const now = Date.now(); const h = wlIp.get(ip) || []; const recent = h.filter((t) => now - t < 3600_000); if (recent.length >= 20) return json(res, 429, { error: 'slow down' }); recent.push(now); wlIp.set(ip, recent)
       const dir = process.env.DATA_DIR || './data'; const f = dir + '/waitlist.jsonl'; if (!wlSet.size && existsSync(f)) for (const l of readFileSync(f, 'utf8').split('\n')) { try { const e = JSON.parse(l); if (e.wallet) wlSet.add(e.wallet) } catch {} }
-      const fresh = !wlSet.has(wallet); if (fresh) { wlSet.add(wallet); try { mkdirSync(dir, { recursive: true }); appendFileSync(f, JSON.stringify({ t: now, wallet, x, ua: String(req.headers['user-agent'] || '').slice(0, 80) }) + '\n') } catch {} }
+      const fresh = !wlSet.has(wallet); if (fresh) { wlSet.add(wallet); try { mkdirSync(dir, { recursive: true }); appendFileSync(f, JSON.stringify({ t: now, wallet, x, ua: String(req.headers['user-agent'] || '').slice(0, 160), ...wlMeta(req, b) }) + '\n') } catch {} }
       return json(res, 200, { ok: true, position: WL_OFF + (fresh ? wlSet.size : [...wlSet].indexOf(wallet) + 1), count: WL_OFF + wlSet.size }) }
     if (p === '/waitlist' && req.method === 'GET') { const dir = process.env.DATA_DIR || './data'; const f = dir + '/waitlist.jsonl'; if (!wlSet.size && existsSync(f)) for (const l of readFileSync(f, 'utf8').split('\n')) { try { const e = JSON.parse(l); if (e.wallet) wlSet.add(e.wallet) } catch {} } return json(res, 200, { count: WL_OFF + wlSet.size }) }
     if (p.startsWith('/candles/')) { const mint = p.slice(9).replace(/[^1-9A-HJ-NP-Za-km-z]/g, ''); const tf = Math.max(5, Math.min(3600, +(u.searchParams.get('tf') || 60))); return json(res, 200, V.candles(mint, tf, Math.min(2000, +(u.searchParams.get('limit') || 300)))) }
     if (p.startsWith('/tape/')) { const f = (process.env.DATA_DIR || './data') + '/tape/' + p.slice(6).replace(/[^1-9A-HJ-NP-Za-km-z]/g, '') + '.jsonl'; if (!existsSync(f)) return json(res, 404, { error: 'no tape' }); res.writeHead(200, { 'content-type': 'application/x-ndjson', 'access-control-allow-origin': '*' }); return createReadStream(f).pipe(res) }
     if (p.startsWith('/vault/mint/')) return json(res, 200, V.byMint(p.slice(12)))
     if (p === '/receipts' && req.method === 'GET') return json(res, 200, V.receipts())
+    if (p.startsWith('/tg/draft/') && req.method === 'GET') { const d = TG.getDraft(p.slice(10)); return d ? json(res, 200, d) : json(res, 404, { error: 'this launch link expired or was never finished — start again with /launch in Telegram' }) }
     // before the /vault/:id read below, which would take 'withdraw-preview' for an id
     if (p === '/vault/withdraw-preview' && req.method === 'GET') return json(res, 200, await V.withdrawPreview(String(u.searchParams.get('id') || '')))
     if (p.startsWith('/vault/') && req.method === 'GET') return json(res, 200, V.get(p.slice(7)))
@@ -184,6 +195,7 @@ if (!DESK_ONLY && !MV.STANDBY() && AL.enabled()) {
     return [head, `${live.length} live chest(s)`, ...rows].join('\n')
   })
   AL.setDaily(async () => dailySummary())
+  TG.init({ list: V.list, receipts: V.receipts, withdrawPreview: V.withdrawPreview, pause: V.ownerPause, solForPct: V.solForPct })
   AL.start().catch(() => {})
 }
 /** the evening Telegram summary: the last 24 h of every chest, from its activity (real tx deltas), plus the vault wallet's split */

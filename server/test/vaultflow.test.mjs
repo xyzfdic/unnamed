@@ -277,3 +277,12 @@ test('receipts: every launch with its sniper report, sales into buys and fees â€
   for (const x of r.rows) { assert.ok(x.mint && x.vaultWallet && x.launchedAt); assert.equal('result' in x, false); assert.equal('chest' in x, false) }
   assert.ok(r.rows.every((x, i) => i === 0 || r.rows[i - 1].launchedAt >= x.launchedAt), 'newest first')
 })
+test('the owner can pause a chest from Telegram and resume it â€” but never lift a pause caused by someone else trading from the vault wallet', () => {
+  const id = V.list().find((x) => x.armed)?.id; const raw = V._get(id); raw._foreignUntil = 0; raw._pauseWhy = undefined
+  V.ownerPause(id, 30 * 60_000); let p = V.list().find((x) => x.id === id); assert.ok(p.paused > Date.now() + 29 * 60_000); assert.equal(p.pauseWhy, 'owner')
+  V.ownerPause(id, 0); p = V.list().find((x) => x.id === id); assert.equal(p.paused, 0)
+  assert.equal(V.seeSwap(id, { trader: BANKY, sig: bs58.encode(Buffer.alloc(64, 11)), side: 'sell', sol: 1 }), true)
+  assert.equal(V.list().find((x) => x.id === id).pauseWhy, 'foreign'); assert.throws(() => V.ownerPause(id, 0), /someone else traded/)
+  V.ownerPause(id, 60 * 60_000); assert.equal(V.list().find((x) => x.id === id).pauseWhy, 'foreign', 'a longer owner pause keeps the real reason')
+  raw._foreignUntil = 0; raw._pauseWhy = undefined
+})
