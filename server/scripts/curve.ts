@@ -1,11 +1,6 @@
 const S = 'https://unnamed-server.onrender.com'; const K = process.env.ADMIN_KEY || ''
-const want = '7b657216'; let h: any = null
-for (let i = 0; i < 28; i++) { h = await (await fetch(S + '/health', { signal: AbortSignal.timeout(20000) })).json().catch(() => null); if (String(h?.commit || '').startsWith(want)) break; await new Promise((r) => setTimeout(r, 25000)) }
-console.log('COMMIT', h?.commit, 'vaults', h?.vaults, 'alerts', h?.alerts, 'curve', JSON.stringify(h?.curve))
-await new Promise((r) => setTimeout(r, 15000))   // the platform warm-up runs 8 s after boot
-const pl: any = await (await fetch(S + '/ll/platform', { signal: AbortSignal.timeout(20000) })).json().catch((e) => ({ err: String(e) }))
-console.log('PLATFORM ready', pl?.ready, 'chain', JSON.stringify(pl?.chain), 'setup', pl?.setup, 'walletSol', pl?.walletSol)
-const ev: any = await (await fetch(S + '/admin/events?key=' + encodeURIComponent(K) + '&since=' + (Date.now() - 20 * 60_000), { signal: AbortSignal.timeout(20000) })).json().catch(() => null)
-const all = (ev?.events || []).filter((e: any) => !/ capture \d/.test(e.msg))
-console.log('events 20m', all.length, 'errors', all.filter((e: any) => e.kind === 'error').length, '429', all.filter((e: any) => /429|too many/i.test(e.msg)).length)
-for (const e of all.filter((e: any) => e.kind === 'error').slice(-15)) console.log(new Date(e.t).toISOString().slice(11, 19), e.kind, String(e.msg).slice(0, 220))
+const ev: any = await (await fetch(S + '/admin/events?key=' + encodeURIComponent(K) + '&since=' + (Date.now() - 40 * 60_000), { signal: AbortSignal.timeout(20000) })).json().catch(() => null)
+for (const e of (ev?.events || []).filter((e: any) => !/ capture \d|sold into|dev cut/.test(e.msg))) console.log(new Date(e.t).toISOString().slice(11, 19), e.kind, String(e.msg).slice(0, 400), e.data ? JSON.stringify(e.data).slice(0, 300) : '')
+const ex: any = await (await fetch(S + '/admin/export?key=' + encodeURIComponent(K), { signal: AbortSignal.timeout(30000) })).json().catch(() => null)
+const vs: any = ex?.files?.['vaults.json'] ? JSON.parse(Buffer.from(ex.files['vaults.json'], 'base64').toString()) : {}
+for (const v of Object.values<any>(vs.vaults || vs)) { const a = (v.activity || []).filter((a: any) => a.t > Date.now() - 40 * 60_000); if (!a.length) continue; console.log('VAULT', String(v.id).slice(0, 8), v.venue, 'stake', v.stakeSol, 'buy', v.vaultBuySol, 'armed', v.armed, 'mint', String(v.mint || '').slice(0, 8)); for (const x of a) console.log('  ', new Date(x.t).toISOString().slice(11, 19), x.kind, String(x.msg || '').slice(0, 300)) }
